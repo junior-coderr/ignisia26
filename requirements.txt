@@ -3,11 +3,7 @@ uvicorn[standard]
 python-multipart
 google-generativeai
 numpy
-scikit-learn
-hdbscan
 sentence-transformers
 PyMuPDF
 python-dotenv
 pydantic
-pandas
-aiofiles

@@ -3,7 +3,7 @@ Compatibility helpers for Gemini SDK variants.
 
 The project was written against `google.genai`, while the current environment
 ships `google-generativeai`. This module hides those differences and also makes
-Gemini optional so the backend can still boot for demo flows without an API key.
+Gemini optional so the backend can still boot even when an API key is missing.
 """
 import os
 import warnings

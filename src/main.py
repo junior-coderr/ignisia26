@@ -1,29 +1,30 @@
 """
-FastAPI backend — GradeSync AI
-Endpoints cover: upload, demo, status, clusters, grading, export
+FastAPI backend for reference-answer-based automatic grading.
 """
-import os
 import asyncio
-import uuid
 import csv
 import io
+import uuid
 from pathlib import Path
-from typing import Optional
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from dotenv import load_dotenv
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from dotenv import load_dotenv
+
+from pdf_processor import process_reference_pdf, process_student_pdf
+from similarity_engine import (
+    cosine_similarity_score,
+    encode_texts,
+    make_combined_text,
+    normalize_question_id,
+    question_sort_key,
+    similarity_to_score,
+)
 
 load_dotenv()
 
-from pdf_processor import process_pdf
-from clustering_engine import cluster_question, get_embedder
-from grading_engine import grading_engine
-from demo_data_generator import generate_demo_exam, RUBRIC
-
-app = FastAPI(title="GradeSync AI", version="1.0.0")
+app = FastAPI(title="GradeSync AI", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -33,365 +34,433 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory store: exam_id → exam object
-exams: dict = {}
-
 UPLOAD_DIR = Path("uploads")
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-
-# ─────────────────────────────────────────────────────────────
-# Models
-# ─────────────────────────────────────────────────────────────
-
-class RubricItem(BaseModel):
-    q_text: str
-    max_marks: float
-    keywords: list[str]
-
-class GradeRequest(BaseModel):
-    exam_id: str
-    q_number: str
-    cluster_id: str
-    score: float
-    feedback: Optional[str] = ""
-
-class RubricSetRequest(BaseModel):
-    exam_id: str
-    rubric: dict[str, RubricItem]
+# In-memory exam store. A single exam is created from one teacher reference PDF.
+exams: dict[str, dict] = {}
 
 
-# ─────────────────────────────────────────────────────────────
-# Background processing pipeline (real PDFs)
-# ─────────────────────────────────────────────────────────────
+def _get_exam(exam_id: str) -> dict:
+    exam = exams.get(exam_id)
+    if not exam:
+        raise HTTPException(404, "Exam not found")
+    return exam
 
-async def run_pipeline(exam_id: str, pdf_paths: list[str], rubric: dict):
+
+def _serialize_reference_question(question: dict) -> dict:
+    return {
+        "q_number": question["q_number"],
+        "q_text": question.get("q_text") or question["q_number"],
+        "max_marks": question.get("max_marks", 5.0),
+        "text": question.get("text", ""),
+        "diagram_present": question.get("diagram_present", False),
+        "diagram_description": question.get("diagram_description"),
+        "combined_text": question.get("combined_text", ""),
+    }
+
+
+def _max_total(exam: dict) -> float:
+    return round(
+        sum(exam["reference"]["questions"][q]["max_marks"] for q in exam.get("questions", [])),
+        1,
+    )
+
+
+def _missing_score_payload(reference_question: dict) -> dict:
+    return {
+        "attempted": False,
+        "score": 0.0,
+        "similarity": 0.0,
+        "max_marks": reference_question["max_marks"],
+        "student_q_text": None,
+        "student_answer_text": "",
+        "student_diagram_description": None,
+        "reference_answer_text": reference_question["text"],
+        "reference_diagram_description": reference_question.get("diagram_description"),
+    }
+
+
+def _build_summary(exam: dict) -> dict:
+    questions = []
+    students = exam.get("students", [])
+    max_total = _max_total(exam)
+    class_average = round(sum(student.get("total", 0.0) for student in students) / len(students), 1) if students else 0.0
+
+    for q_number in exam.get("questions", []):
+        reference_question = exam["reference"]["questions"][q_number]
+        score_rows = [student["scores"][q_number] for student in students if q_number in student.get("scores", {})]
+        attempted = [row for row in score_rows if row.get("attempted")]
+
+        avg_similarity = round(sum(row["similarity"] for row in attempted) / len(attempted), 2) if attempted else 0.0
+        avg_score = round(sum(row["score"] for row in score_rows) / len(score_rows), 1) if score_rows else 0.0
+
+        questions.append({
+            "q_number": q_number,
+            "q_text": reference_question.get("q_text") or q_number,
+            "max_marks": reference_question["max_marks"],
+            "students_attempted": len(attempted),
+            "avg_similarity": avg_similarity,
+            "avg_score": avg_score,
+        })
+
+    return {
+        "exam_id": exam["exam_id"],
+        "title": exam.get("title") or "Reference Answer Key",
+        "exam_code": exam.get("exam_code", ""),
+        "status": exam.get("status"),
+        "reference_ready": bool(exam.get("reference", {}).get("questions")),
+        "total_students": len(students),
+        "question_count": len(exam.get("questions", [])),
+        "max_total": max_total,
+        "class_average": class_average,
+        "questions": questions,
+    }
+
+
+def _build_results_payload(exam: dict) -> dict:
+    return {
+        "exam_id": exam["exam_id"],
+        "title": exam.get("title") or "Reference Answer Key",
+        "exam_code": exam.get("exam_code", ""),
+        "questions": [
+            {
+                "q_number": q_number,
+                "q_text": exam["reference"]["questions"][q_number].get("q_text") or q_number,
+                "max_marks": exam["reference"]["questions"][q_number]["max_marks"],
+            }
+            for q_number in exam.get("questions", [])
+        ],
+        "students": exam.get("students", []),
+        "max_total": _max_total(exam),
+    }
+
+
+async def run_reference_pipeline(exam_id: str, reference_pdf_path: str):
     exam = exams[exam_id]
-    exam["status"] = "processing"
+    exam["status"] = "processing_reference"
+    exam["progress"] = 0.1
 
-    all_students = []
-    total = len(pdf_paths)
+    try:
+        extracted = await asyncio.to_thread(process_reference_pdf, reference_pdf_path)
+        raw_questions = extracted.get("questions", [])
+        if not raw_questions:
+            raise ValueError("No questions could be extracted from the reference answer sheet")
 
-    for idx, path in enumerate(pdf_paths):
-        exam["progress"] = round(idx / total * 0.6, 2)   # 0-60% = OCR phase
-        try:
-            record = await asyncio.to_thread(process_pdf, path)
-            meta = record.get("student_metadata", {})
-            all_students.append({
-                "roll_number": meta.get("roll_number") or f"STU{idx+1:03d}",
-                "name": meta.get("student_name") or f"Student {idx+1}",
-                "exam_code": meta.get("exam_code", ""),
-                "answers": record.get("answers", []),
-            })
-        except Exception as e:
-            print(f"Error processing {path}: {e}")
+        exam["progress"] = 0.55
 
-    if not all_students:
+        normalized_questions: dict[str, dict] = {}
+        order: list[str] = []
+
+        for question in raw_questions:
+            q_number = normalize_question_id(question.get("q_number"))
+            if not q_number:
+                continue
+
+            max_marks = question.get("max_marks")
+            max_marks = float(max_marks) if max_marks is not None else 5.0
+
+            normalized_questions[q_number] = {
+                "q_number": q_number,
+                "q_text": question.get("q_text") or q_number,
+                "max_marks": max_marks,
+                "text": question.get("text", ""),
+                "diagram_present": question.get("diagram_present", False),
+                "diagram_description": question.get("diagram_description"),
+            }
+            if q_number not in order:
+                order.append(q_number)
+
+        if not normalized_questions:
+            raise ValueError("No valid question IDs were extracted from the reference answer sheet")
+
+        texts = []
+        ordered_questions = sorted(order, key=question_sort_key)
+        for q_number in ordered_questions:
+            normalized_questions[q_number]["combined_text"] = make_combined_text(normalized_questions[q_number])
+            texts.append(normalized_questions[q_number]["combined_text"])
+
+        embeddings = await asyncio.to_thread(encode_texts, texts)
+        for index, q_number in enumerate(ordered_questions):
+            normalized_questions[q_number]["embedding"] = embeddings[index]
+
+        exam["reference"] = {
+            "source_pdf": reference_pdf_path,
+            "questions": normalized_questions,
+        }
+        exam["questions"] = ordered_questions
+        exam["title"] = extracted.get("exam_title") or "Reference Answer Key"
+        exam["exam_code"] = extracted.get("exam_code") or ""
+        exam["progress"] = 1.0
+        exam["status"] = "reference_ready"
+    except Exception as exc:
         exam["status"] = "error"
-        exam["error"] = "No answers could be extracted"
+        exam["error"] = str(exc)
+        exam["progress"] = 0.0
+
+
+async def run_student_pipeline(exam_id: str, pdf_paths: list[str]):
+    exam = exams[exam_id]
+    if not exam.get("reference", {}).get("questions"):
+        exam["status"] = "error"
+        exam["error"] = "Reference answer sheet must be uploaded before student submissions"
         return
 
-    exam["students"] = all_students
-    exam["status"] = "clustering"
-    exam["progress"] = 0.65
+    exam["status"] = "processing_students"
+    exam["progress"] = 0.05
 
-    # Collect all question numbers across all students
-    q_numbers = sorted({
-        ans["q_number"]
-        for stu in all_students
-        for ans in stu["answers"]
-    })
-    exam["questions"] = q_numbers
+    batch_students = []
+    reference_questions = exam["reference"]["questions"]
+    question_order = exam.get("questions", [])
+    total = max(len(pdf_paths), 1)
+    existing_count = len(exam.get("students", []))
 
-    if len(all_students) > 1:
-        # Avoid downloading/warming the embedder for single-paper uploads where no clustering is possible.
-        await asyncio.to_thread(get_embedder)
+    try:
+        for idx, pdf_path in enumerate(pdf_paths):
+            exam["progress"] = round(0.05 + (idx / total) * 0.55, 2)
+            record = await asyncio.to_thread(process_student_pdf, pdf_path)
+            metadata = record.get("student_metadata", {})
 
-    exam_clusters: dict = {}
-    total_questions = max(len(q_numbers), 1)
-    for qi, q_num in enumerate(q_numbers):
-        exam["progress"] = round(0.65 + (qi / total_questions) * 0.35, 2)
-        student_answers = [
-            {"roll_number": stu["roll_number"], "name": stu["name"],
-             "answer": ans}
-            for stu in all_students
-            for ans in stu["answers"]
-            if ans["q_number"] == q_num
-        ]
-        rubric_for_q = rubric.get(q_num, {"q_text": q_num, "max_marks": 5, "keywords": []})
-        result = await asyncio.to_thread(
-            cluster_question, q_num, student_answers, rubric_for_q, True
-        )
-        exam_clusters[q_num] = result
+            student = {
+                "roll_number": metadata.get("roll_number") or f"STU{existing_count + idx + 1:03d}",
+                "name": metadata.get("student_name") or f"Student {existing_count + idx + 1}",
+                "exam_code": metadata.get("exam_code") or exam.get("exam_code", ""),
+                "source_pdf": Path(pdf_path).name,
+                "answers": record.get("answers", []),
+                "scores": {},
+                "max_total": _max_total(exam),
+                "total": 0.0,
+            }
+            batch_students.append(student)
 
-    exam["clusters"] = exam_clusters
-    exam["rubric"] = rubric
-    exam["status"] = "ready"
-    exam["progress"] = 1.0
+        exam["progress"] = 0.65
 
+        embedding_jobs = []
+        texts = []
+        for student_index, student in enumerate(batch_students):
+            answers_by_question = {}
+            for answer in student.get("answers", []):
+                q_number = normalize_question_id(answer.get("q_number"))
+                if not q_number:
+                    continue
+                answers_by_question[q_number] = {
+                    **answer,
+                    "q_number": q_number,
+                    "combined_text": make_combined_text(answer),
+                }
+            student["answers_by_question"] = answers_by_question
 
-# ─────────────────────────────────────────────────────────────
-# Routes
-# ─────────────────────────────────────────────────────────────
+            for q_number in question_order:
+                reference_question = reference_questions[q_number]
+                if q_number not in answers_by_question:
+                    student["scores"][q_number] = _missing_score_payload(reference_question)
+                    continue
+
+                answer = answers_by_question[q_number]
+                if not answer.get("combined_text"):
+                    student["scores"][q_number] = _missing_score_payload(reference_question)
+                    continue
+
+                embedding_jobs.append((student_index, q_number))
+                texts.append(answer["combined_text"])
+
+        if texts:
+            embeddings = await asyncio.to_thread(encode_texts, texts)
+            for index, (student_index, q_number) in enumerate(embedding_jobs):
+                reference_question = reference_questions[q_number]
+                answer = batch_students[student_index]["answers_by_question"][q_number]
+                similarity = cosine_similarity_score(embeddings[index], reference_question["embedding"])
+                score = similarity_to_score(similarity, reference_question["max_marks"])
+                batch_students[student_index]["scores"][q_number] = {
+                    "attempted": True,
+                    "score": score,
+                    "similarity": round(similarity, 4),
+                    "max_marks": reference_question["max_marks"],
+                    "student_q_text": answer.get("q_text"),
+                    "student_answer_text": answer.get("text", ""),
+                    "student_diagram_description": answer.get("diagram_description"),
+                    "reference_answer_text": reference_question["text"],
+                    "reference_diagram_description": reference_question.get("diagram_description"),
+                }
+
+        for student in batch_students:
+            running_total = 0.0
+            for q_number in question_order:
+                if q_number not in student["scores"]:
+                    student["scores"][q_number] = _missing_score_payload(reference_questions[q_number])
+                running_total += student["scores"][q_number]["score"]
+            student["total"] = round(running_total, 1)
+            student.pop("answers_by_question", None)
+
+        exam.setdefault("students", []).extend(batch_students)
+        exam["progress"] = 1.0
+        exam["status"] = "ready"
+        exam["error"] = None
+    except Exception as exc:
+        exam["status"] = "error"
+        exam["error"] = str(exc)
+        exam["progress"] = 0.0
+
 
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
 
 
-@app.post("/api/demo")
-def start_demo():
-    """Instant demo — pre-clustered synthetic data, no ML needed."""
-    data = generate_demo_exam()
-    exam_id = data["exam_id"]
-    exams[exam_id] = data
-    return {"exam_id": exam_id, "status": "ready"}
-
-
-@app.post("/api/upload")
-async def upload_pdfs(
+@app.post("/api/reference/upload")
+async def upload_reference_answer_sheet(
     background_tasks: BackgroundTasks,
-    files: list[UploadFile] = File(...),
+    file: UploadFile = File(...),
 ):
-    if not files:
-        raise HTTPException(400, "No files uploaded")
+    if not file.filename:
+        raise HTTPException(400, "Reference PDF is required")
 
-    exam_id = "exam_" + uuid.uuid4().hex[:8]
+    exam_id = f"exam_{uuid.uuid4().hex[:8]}"
     exam_dir = UPLOAD_DIR / exam_id
     exam_dir.mkdir(parents=True, exist_ok=True)
-
-    saved_paths = []
-    for f in files:
-        dest = exam_dir / f.filename
-        content = await f.read()
-        dest.write_bytes(content)
-        saved_paths.append(str(dest))
+    reference_path = exam_dir / f"reference_{file.filename}"
+    reference_path.write_bytes(await file.read())
 
     exams[exam_id] = {
         "exam_id": exam_id,
-        "title": "Uploaded Exam",
         "status": "queued",
         "progress": 0.0,
+        "title": "Reference Answer Key",
+        "exam_code": "",
+        "reference": {},
         "questions": [],
-        "clusters": {},
-        "rubric": {},
         "students": [],
-        "total_students": len(files),
+        "error": None,
     }
 
-    background_tasks.add_task(run_pipeline, exam_id, saved_paths, {})
+    background_tasks.add_task(run_reference_pipeline, exam_id, str(reference_path))
+    return {"exam_id": exam_id, "status": "queued"}
+
+
+@app.post("/api/exam/{exam_id}/students/upload")
+async def upload_student_submissions(
+    exam_id: str,
+    background_tasks: BackgroundTasks,
+    files: list[UploadFile] = File(...),
+):
+    exam = _get_exam(exam_id)
+    if not exam.get("reference", {}).get("questions"):
+        raise HTTPException(400, "Reference answer sheet is not ready yet")
+    if not files:
+        raise HTTPException(400, "At least one student PDF is required")
+
+    exam_dir = UPLOAD_DIR / exam_id / "students"
+    exam_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_paths = []
+    for file in files:
+        destination = exam_dir / file.filename
+        destination.write_bytes(await file.read())
+        saved_paths.append(str(destination))
+
+    background_tasks.add_task(run_student_pipeline, exam_id, saved_paths)
     return {"exam_id": exam_id, "status": "queued", "file_count": len(files)}
-
-
-@app.post("/api/exam/{exam_id}/rubric")
-def set_rubric(exam_id: str, req: RubricSetRequest):
-    if exam_id not in exams:
-        raise HTTPException(404, "Exam not found")
-    exams[exam_id]["rubric"] = {k: v.model_dump() for k, v in req.rubric.items()}
-    return {"success": True}
 
 
 @app.get("/api/exam/{exam_id}/status")
 def get_status(exam_id: str):
-    exam = exams.get(exam_id)
-    if not exam:
-        raise HTTPException(404, "Exam not found")
+    exam = _get_exam(exam_id)
     return {
         "exam_id": exam_id,
         "status": exam.get("status"),
         "progress": exam.get("progress", 0.0),
-        "total_students": exam.get("total_students", 0),
-        "questions": exam.get("questions", []),
+        "reference_ready": bool(exam.get("reference", {}).get("questions")),
+        "question_count": len(exam.get("questions", [])),
+        "total_students": len(exam.get("students", [])),
+        "error": exam.get("error"),
     }
 
 
 @app.get("/api/exam/{exam_id}/summary")
 def get_summary(exam_id: str):
-    exam = exams.get(exam_id)
-    if not exam:
-        raise HTTPException(404, "Exam not found")
-    if exam.get("status") != "ready":
-        raise HTTPException(400, f"Exam not ready: {exam.get('status')}")
-
-    clusters_by_q = exam.get("clusters", {})
-    progress = grading_engine.grading_progress(exam_id, clusters_by_q)
-
-    questions_summary = []
-    for q in exam.get("questions", []):
-        qdata = clusters_by_q.get(q, {})
-        questions_summary.append({
-            "q_number": q,
-            "q_text": exam.get("rubric", {}).get(q, {}).get("q_text", q),
-            "max_marks": exam.get("rubric", {}).get(q, {}).get("max_marks", 5),
-            "cluster_count": len(qdata.get("clusters", [])),
-            "edge_case_count": len(qdata.get("edge_cases", [])),
-            "graded": progress["by_question"].get(q, {}).get("graded", 0),
-            "total": progress["by_question"].get(q, {}).get("total", 0),
-        })
-
-    return {
-        "exam_id": exam_id,
-        "title": exam.get("title", "Exam"),
-        "exam_code": exam.get("exam_code", ""),
-        "total_students": exam.get("total_students", 0),
-        "questions": questions_summary,
-        "overall_progress": progress["overall"],
-        "graded_clusters": progress["graded_clusters"],
-        "total_clusters": progress["total_clusters"],
-    }
+    exam = _get_exam(exam_id)
+    if exam.get("status") not in {"reference_ready", "processing_students", "ready"}:
+        raise HTTPException(400, f"Exam not ready for summary: {exam.get('status')}")
+    return _build_summary(exam)
 
 
-@app.get("/api/exam/{exam_id}/question/{q_number}/clusters")
-def get_clusters(exam_id: str, q_number: str):
-    exam = exams.get(exam_id)
-    if not exam:
-        raise HTTPException(404, "Exam not found")
-    if exam.get("status") != "ready":
-        raise HTTPException(400, "Exam not ready")
-
-    q_data = exam.get("clusters", {}).get(q_number)
-    if q_data is None:
-        raise HTTPException(404, f"Question {q_number} not found")
-
-    rubric = exam.get("rubric", {}).get(q_number, {})
-
-    # Merge grading info
-    def enrich(cluster):
-        grade = grading_engine.get_cluster_grade(exam_id, cluster["cluster_id"])
-        if grade:
-            cluster = {**cluster, "graded": True, "score": grade["score"],
-                       "feedback": grade["feedback"]}
-        return cluster
-
-    return {
-        "q_number": q_number,
-        "q_text": rubric.get("q_text", q_number),
-        "max_marks": rubric.get("max_marks", 5),
-        "rubric_keywords": rubric.get("keywords", []),
-        "clusters": [enrich(c) for c in q_data.get("clusters", [])],
-        "edge_cases": [enrich(c) for c in q_data.get("edge_cases", [])],
-    }
-
-
-@app.post("/api/grade")
-def apply_grade(req: GradeRequest):
-    exam = exams.get(req.exam_id)
-    if not exam:
-        raise HTTPException(404, "Exam not found")
-
-    # Find cluster in exam data
-    q_data = exam.get("clusters", {}).get(req.q_number)
-    if not q_data:
+@app.get("/api/exam/{exam_id}/question/{q_number}")
+def get_question_detail(exam_id: str, q_number: str):
+    exam = _get_exam(exam_id)
+    normalized_q_number = normalize_question_id(q_number)
+    if not normalized_q_number:
         raise HTTPException(404, "Question not found")
 
-    all_clusters = q_data.get("clusters", []) + q_data.get("edge_cases", [])
-    target = next((c for c in all_clusters if c["cluster_id"] == req.cluster_id), None)
-    if not target:
-        raise HTTPException(404, "Cluster not found")
+    reference_question = exam.get("reference", {}).get("questions", {}).get(normalized_q_number)
+    if not reference_question:
+        raise HTTPException(404, f"Question {q_number} not found")
 
-    count = grading_engine.apply_grade(
-        exam_id=req.exam_id,
-        q_number=req.q_number,
-        cluster_id=req.cluster_id,
-        students=target["students"],
-        score=req.score,
-        feedback=req.feedback or "",
-    )
+    students = []
+    for student in exam.get("students", []):
+        score = student.get("scores", {}).get(normalized_q_number, _missing_score_payload(reference_question))
+        students.append({
+            "roll_number": student["roll_number"],
+            "name": student["name"],
+            "exam_code": student.get("exam_code", ""),
+            "source_pdf": student.get("source_pdf"),
+            **score,
+        })
 
-    # Update in-memory cluster graded flag
-    target["graded"] = True
-    target["score"] = req.score
-    target["feedback"] = req.feedback or ""
-
-    progress = grading_engine.grading_progress(req.exam_id, exam.get("clusters", {}))
+    students.sort(key=lambda row: (-row["score"], row["roll_number"]))
     return {
-        "success": True,
-        "students_graded": count,
-        "overall_progress": progress["overall"],
-        "graded_clusters": progress["graded_clusters"],
-        "total_clusters": progress["total_clusters"],
+        "q_number": normalized_q_number,
+        "q_text": reference_question.get("q_text") or normalized_q_number,
+        "max_marks": reference_question["max_marks"],
+        "reference_answer": _serialize_reference_question(reference_question),
+        "students": students,
     }
+
+
+@app.get("/api/exam/{exam_id}/results")
+def get_results(exam_id: str):
+    exam = _get_exam(exam_id)
+    if exam.get("status") not in {"ready", "processing_students", "reference_ready"}:
+        raise HTTPException(400, f"Exam results unavailable: {exam.get('status')}")
+    return _build_results_payload(exam)
+
+
+@app.get("/api/exam/{exam_id}/export/json")
+def export_results_json(exam_id: str):
+    return get_results(exam_id)
 
 
 @app.get("/api/exam/{exam_id}/export")
-def export_grades(exam_id: str):
-    exam = exams.get(exam_id)
-    if not exam:
-        raise HTTPException(404, "Exam not found")
+def export_results_csv(exam_id: str):
+    exam = _get_exam(exam_id)
+    question_order = exam.get("questions", [])
 
-    questions = exam.get("questions", [])
-    all_students = exam.get("students", [])
-    student_grades = grading_engine.get_student_grades(exam_id)
-    grades_by_roll = {g["roll_number"]: g for g in student_grades}
-
-    # Build rows
-    rows = []
-    for stu in all_students:
-        roll = stu["roll_number"]
-        g = grades_by_roll.get(roll, {})
-        scores = g.get("scores", {})
-        row = {
-            "Roll Number": roll,
-            "Name": stu.get("name", ""),
-        }
-        total = 0.0
-        max_total = 0.0
-        for q in questions:
-            rubric = exam.get("rubric", {}).get(q, {})
-            max_m = rubric.get("max_marks", 5)
-            max_total += max_m
-            sc = scores.get(q, {}).get("score")
-            row[f"{q} Score"] = sc if sc is not None else "Not graded"
-            row[f"{q} Feedback"] = scores.get(q, {}).get("feedback", "")
-            if sc is not None:
-                total += sc
-        row["Total"] = round(total, 1)
-        row["Max Total"] = max_total
-        rows.append(row)
-
-    # Stream as CSV
     output = io.StringIO()
-    if rows:
-        writer = csv.DictWriter(output, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
+    fieldnames = ["Roll Number", "Name", "Exam Code"]
+    for q_number in question_order:
+        fieldnames.append(f"{q_number} Score")
+        fieldnames.append(f"{q_number} Similarity")
+    fieldnames.extend(["Total", "Max Total"])
+
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+
+    for student in exam.get("students", []):
+        row = {
+            "Roll Number": student["roll_number"],
+            "Name": student["name"],
+            "Exam Code": student.get("exam_code", ""),
+        }
+        for q_number in question_order:
+            score = student["scores"].get(q_number, {})
+            row[f"{q_number} Score"] = score.get("score", 0.0)
+            row[f"{q_number} Similarity"] = score.get("similarity", 0.0)
+        row["Total"] = student.get("total", 0.0)
+        row["Max Total"] = student.get("max_total", _max_total(exam))
+        writer.writerow(row)
 
     output.seek(0)
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=grades_{exam_id}.csv"}
+        headers={"Content-Disposition": f"attachment; filename=grades_{exam_id}.csv"},
     )
-
-
-@app.get("/api/exam/{exam_id}/export/json")
-def export_grades_json(exam_id: str):
-    exam = exams.get(exam_id)
-    if not exam:
-        raise HTTPException(404, "Exam not found")
-
-    questions = exam.get("questions", [])
-    all_students = exam.get("students", [])
-    student_grades = grading_engine.get_student_grades(exam_id)
-    grades_by_roll = {g["roll_number"]: g for g in student_grades}
-
-    results = []
-    for stu in all_students:
-        roll = stu["roll_number"]
-        g = grades_by_roll.get(roll, {})
-        scores = g.get("scores", {})
-        per_q = {}
-        total = 0.0
-        for q in questions:
-            sc = scores.get(q, {}).get("score")
-            per_q[q] = {"score": sc, "feedback": scores.get(q, {}).get("feedback", "")}
-            if sc is not None:
-                total += sc
-        results.append({
-            "roll_number": roll,
-            "name": stu.get("name", ""),
-            "scores": per_q,
-            "total": round(total, 1),
-        })
-
-    return {"exam_id": exam_id, "students": results}
