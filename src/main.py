@@ -95,9 +95,6 @@ async def run_pipeline(exam_id: str, pdf_paths: list[str], rubric: dict):
     exam["status"] = "clustering"
     exam["progress"] = 0.65
 
-    # Pre-warm embedder
-    await asyncio.to_thread(get_embedder)
-
     # Collect all question numbers across all students
     q_numbers = sorted({
         ans["q_number"]
@@ -106,9 +103,14 @@ async def run_pipeline(exam_id: str, pdf_paths: list[str], rubric: dict):
     })
     exam["questions"] = q_numbers
 
+    if len(all_students) > 1:
+        # Avoid downloading/warming the embedder for single-paper uploads where no clustering is possible.
+        await asyncio.to_thread(get_embedder)
+
     exam_clusters: dict = {}
+    total_questions = max(len(q_numbers), 1)
     for qi, q_num in enumerate(q_numbers):
-        exam["progress"] = round(0.65 + (qi / len(q_numbers)) * 0.35, 2)
+        exam["progress"] = round(0.65 + (qi / total_questions) * 0.35, 2)
         student_answers = [
             {"roll_number": stu["roll_number"], "name": stu["name"],
              "answer": ans}
@@ -172,12 +174,12 @@ async def upload_pdfs(
         "progress": 0.0,
         "questions": [],
         "clusters": {},
-        "rubric": RUBRIC,   # default rubric
+        "rubric": {},
         "students": [],
         "total_students": len(files),
     }
 
-    background_tasks.add_task(run_pipeline, exam_id, saved_paths, RUBRIC)
+    background_tasks.add_task(run_pipeline, exam_id, saved_paths, {})
     return {"exam_id": exam_id, "status": "queued", "file_count": len(files)}
 
 

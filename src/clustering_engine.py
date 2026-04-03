@@ -12,12 +12,12 @@ import numpy as np
 import hdbscan
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
-from google import genai
 from dotenv import load_dotenv
 
+from gemini_compat import DEFAULT_GEMINI_MODEL, gemini_enabled, generate_content, response_text
+
 load_dotenv()
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-GEMINI_MODEL = "gemini-2.5-flash-lite-preview-04-17"
+GEMINI_MODEL = DEFAULT_GEMINI_MODEL
 EMBED_MODEL  = "paraphrase-multilingual-mpnet-base-v2"
 
 _embedder = None
@@ -44,6 +44,10 @@ def _find_medoid(members: list, embeddings: np.ndarray) -> dict:
 
 
 def label_cluster(sample_texts: list[str], rubric_keywords: list[str], q_text: str) -> dict:
+    if not gemini_enabled():
+        return {"label": f"Cluster ({len(sample_texts)} answers)", "type": "partial",
+                "matched_keywords": [], "confidence": 0.5}
+
     samples = "\n---\n".join(t[:400] for t in sample_texts[:3])
     kw = ", ".join(rubric_keywords) if rubric_keywords else "not provided"
     prompt = f"""Grading assistant. Question: "{q_text}"
@@ -61,8 +65,8 @@ Return ONLY valid JSON:
   "confidence": 0.85
 }}"""
     try:
-        resp = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
-        text = resp.text.strip()
+        resp = generate_content(GEMINI_MODEL, prompt)
+        text = response_text(resp).strip()
         if "```" in text:
             text = text.split("```")[1]
             if text.startswith("json"):
@@ -86,6 +90,32 @@ def cluster_question(
     """
     if not student_answers:
         return {"clusters": [], "edge_cases": []}
+
+    keywords = rubric.get("keywords", [])
+    q_text = rubric.get("q_text", q_number)
+    max_marks = rubric.get("max_marks", 5)
+
+    if len(student_answers) == 1:
+        member = {**student_answers[0], "combined_text": make_combined_text(student_answers[0]["answer"])}
+        matched_kw = [k for k in keywords if k.lower() in member["combined_text"].lower()]
+        kw_pct = len(matched_kw) / len(keywords) if keywords else 0.0
+        return {
+            "clusters": [],
+            "edge_cases": [{
+                "cluster_id": f"{q_number}_edge_0",
+                "label": "Edge Case – single submitted answer",
+                "type": "edge_case",
+                "student_count": 1,
+                "students": [member],
+                "representative": member,
+                "matched_keywords": matched_kw,
+                "keyword_match_pct": round(kw_pct, 2),
+                "suggested_score": round(kw_pct * max_marks, 1),
+                "graded": False,
+                "score": None,
+                "feedback": "",
+            }],
+        }
 
     embedder = get_embedder()
     combined = [make_combined_text(sa["answer"]) for sa in student_answers]
@@ -112,15 +142,11 @@ def cluster_question(
             raw_clusters[lbl]["members"].append(record)
             raw_clusters[lbl]["embs"].append(embeddings[i])
 
-    keywords = rubric.get("keywords", [])
-    q_text   = rubric.get("q_text", q_number)
-
     def build_cluster_obj(cluster_id: str, members: list, embs: np.ndarray, is_edge: bool = False):
         rep = _find_medoid(members, embs)
         sample_texts = [m["combined_text"] for m in members]
         matched_kw = [k for k in keywords if any(k.lower() in t.lower() for t in sample_texts)]
         kw_pct = len(matched_kw) / len(keywords) if keywords else 0.0
-        max_marks = rubric.get("max_marks", 5)
         suggested = round(kw_pct * max_marks, 1)
 
         label_data = {"label": "Edge Case – unique answer", "type": "edge_case",

@@ -7,14 +7,19 @@ Phase 1: Ingestion & Smart Digitization
 import os
 import json
 import fitz  # PyMuPDF
-from google import genai
-from google.genai import types
 from dotenv import load_dotenv
 
-load_dotenv()
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+from gemini_compat import (
+    DEFAULT_GEMINI_MODEL,
+    gemini_enabled,
+    generate_content,
+    make_inline_part,
+    response_text,
+)
 
-GEMINI_MODEL = "gemini-2.5-flash-lite-preview-04-17"
+load_dotenv()
+
+GEMINI_MODEL = DEFAULT_GEMINI_MODEL
 
 METADATA_PROMPT = """You are extracting structured data from an exam answer booklet cover page.
 Extract these fields and return ONLY valid JSON (no markdown, no explanation):
@@ -65,28 +70,36 @@ def _parse_json_response(text: str) -> dict | list:
 
 
 def extract_metadata(pdf_doc) -> dict:
+    if not gemini_enabled():
+        return {"student_name": None, "roll_number": None, "exam_code": None}
+
     img = _page_to_png(pdf_doc, 0)
     try:
-        resp = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[METADATA_PROMPT, types.Part.from_bytes(data=img, mime_type="image/png")]
+        resp = generate_content(
+            GEMINI_MODEL,
+            [METADATA_PROMPT, make_inline_part(data=img, mime_type="image/png")],
         )
-        return _parse_json_response(resp.text)
-    except Exception:
+        return _parse_json_response(response_text(resp))
+    except Exception as exc:
+        print(f"Metadata extraction failed: {exc}")
         return {"student_name": None, "roll_number": None, "exam_code": None}
 
 
 def extract_answers(pdf_doc) -> list:
+    if not gemini_enabled():
+        return []
+
     num_pages = len(pdf_doc)
     start = 1 if num_pages > 1 else 0
     content = [ANSWER_PROMPT]
     for i in range(start, num_pages):
-        content.append(types.Part.from_bytes(data=_page_to_png(pdf_doc, i), mime_type="image/png"))
+        content.append(make_inline_part(data=_page_to_png(pdf_doc, i), mime_type="image/png"))
     try:
-        resp = client.models.generate_content(model=GEMINI_MODEL, contents=content)
-        data = _parse_json_response(resp.text)
+        resp = generate_content(GEMINI_MODEL, content)
+        data = _parse_json_response(response_text(resp))
         return data.get("answers", []) if isinstance(data, dict) else []
-    except Exception:
+    except Exception as exc:
+        print(f"Answer extraction failed: {exc}")
         return []
 
 
