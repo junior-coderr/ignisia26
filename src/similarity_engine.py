@@ -376,7 +376,7 @@ def _expects_steps(question_text: str, reference_text: str, segments: list[str])
     return len(segments) >= 4 or any(hint in combined for hint in PROCESS_HINTS)
 
 
-def _scale_similarity(value: float, low: float = 0.32, high: float = 0.82) -> float:
+def _scale_similarity(value: float, low: float = 0.18, high: float = 0.78) -> float:
     if high <= low:
         return max(0.0, min(1.0, value))
     return float(max(0.0, min(1.0, (value - low) / (high - low))))
@@ -385,7 +385,7 @@ def _scale_similarity(value: float, low: float = 0.32, high: float = 0.82) -> fl
 def _length_factor(student_tokens: int, reference_tokens: int) -> float:
     if student_tokens <= 0 or reference_tokens <= 0:
         return 0.0
-    target = max(8, int(reference_tokens * 0.55))
+    target = max(5, int(reference_tokens * 0.35))
     return float(max(0.0, min(1.0, student_tokens / target)))
 
 
@@ -767,7 +767,7 @@ def grade_answer(student_answer: dict, reference_question: dict, student_embeddi
         reference_embedding = encode_texts([reference_text])[0]
 
     global_similarity = cosine_similarity_score(student_embedding, reference_embedding)
-    global_similarity_scaled = _scale_similarity(global_similarity, low=0.28, high=0.86)
+    global_similarity_scaled = _scale_similarity(global_similarity, low=0.15, high=0.75)
 
     rubric_segments = reference_question.get("rubric_segments") or _split_segments(reference_text)
     rubric_segment_embeddings = reference_question.get("rubric_segment_embeddings")
@@ -802,12 +802,12 @@ def grade_answer(student_answer: dict, reference_question: dict, student_embeddi
         keyword_hits = sum(1 for keyword in concept_keywords if keyword in student_content_tokens)
         target_keyword_hits = max(1, min(2, len(concept_keywords)))
         lexical_coverage = float(min(1.0, keyword_hits / target_keyword_hits)) if concept_keywords else 0.0
-        semantic_component = _scale_similarity(best_similarity, low=0.44, high=0.86)
-        coverage_value = 0.78 * semantic_component + 0.22 * lexical_coverage
-        if semantic_component < 0.28:
-            coverage_value = min(coverage_value, lexical_coverage * 0.42)
-        elif lexical_coverage >= 0.5:
-            coverage_value = max(coverage_value, 0.7 * semantic_component + 0.3 * lexical_coverage)
+        semantic_component = _scale_similarity(best_similarity, low=0.25, high=0.78)
+        coverage_value = 0.72 * semantic_component + 0.28 * lexical_coverage
+        if semantic_component < 0.15:
+            coverage_value = min(coverage_value, lexical_coverage * 0.55)
+        elif lexical_coverage >= 0.4:
+            coverage_value = max(coverage_value, 0.65 * semantic_component + 0.35 * lexical_coverage)
 
         concept_contradictions = _concept_contradictions(concept, best_excerpt, student_text)
         if concept_contradictions:
@@ -818,14 +818,14 @@ def grade_answer(student_answer: dict, reference_question: dict, student_embeddi
 
         concept_weight = rubric_weights[index] if index < len(rubric_weights) else (1.0 / len(rubric_segments) if rubric_segments else 0.0)
         weighted_concept_scores.append(coverage_value * concept_weight)
-        if coverage_value >= 0.72 and not concept_contradictions:
+        if coverage_value >= 0.55 and not concept_contradictions:
             strong_matches += 1
 
         if concept_contradictions:
             status = "missed"
-        elif coverage_value >= 0.74 and semantic_component >= 0.52:
+        elif coverage_value >= 0.55 and semantic_component >= 0.35:
             status = "matched"
-        elif coverage_value >= 0.42 and semantic_component >= 0.2:
+        elif coverage_value >= 0.25 and semantic_component >= 0.1:
             status = "partial"
         else:
             status = "missed"
@@ -871,37 +871,37 @@ def grade_answer(student_answer: dict, reference_question: dict, student_embeddi
     )
 
     quality_ratio = (
-        0.28 * global_similarity_scaled
-        + 0.14 * keyword_coverage
-        + 0.36 * concept_coverage
-        + 0.22 * structure_score
+        0.32 * global_similarity_scaled
+        + 0.15 * keyword_coverage
+        + 0.33 * concept_coverage
+        + 0.20 * structure_score
     )
     if formula_applicable:
-        quality_ratio = 0.88 * quality_ratio + 0.12 * formula_score
+        quality_ratio = 0.90 * quality_ratio + 0.10 * formula_score
     if numeric_applicable:
-        quality_ratio = 0.9 * quality_ratio + 0.1 * numeric_score
+        quality_ratio = 0.92 * quality_ratio + 0.08 * numeric_score
 
     if reference_question.get("expects_steps"):
-        coverage_floor = min(1.0, strong_ratio / 0.6) if strong_ratio < 0.6 else 1.0
-        quality_ratio *= 0.45 + 0.55 * coverage_floor
+        coverage_floor = min(1.0, strong_ratio / 0.45) if strong_ratio < 0.45 else 1.0
+        quality_ratio *= 0.55 + 0.45 * coverage_floor
 
-    if concept_coverage < 0.22 and global_similarity_scaled < 0.35:
-        quality_ratio *= 0.45
+    if concept_coverage < 0.15 and global_similarity_scaled < 0.2:
+        quality_ratio *= 0.6
 
-    if student_token_count < 5:
-        quality_ratio *= 0.4
+    if student_token_count < 3:
+        quality_ratio *= 0.5
 
     if reject_penalty:
-        quality_ratio *= max(0.12, 1.0 - reject_penalty)
+        quality_ratio *= max(0.2, 1.0 - reject_penalty)
 
-    if global_similarity_scaled >= 0.8 and concept_coverage < 0.3 and keyword_coverage < 0.18:
-        quality_ratio *= 0.58
-    if keyword_coverage >= 0.6 and concept_coverage < 0.25:
-        quality_ratio *= 0.52
+    if global_similarity_scaled >= 0.85 and concept_coverage < 0.2 and keyword_coverage < 0.1:
+        quality_ratio *= 0.65
+    if keyword_coverage >= 0.65 and concept_coverage < 0.2:
+        quality_ratio *= 0.6
     if formula_applicable and formula_score == 0.0:
-        quality_ratio *= 0.7
+        quality_ratio *= 0.8
     if numeric_applicable and numeric_score == 0.0:
-        quality_ratio *= 0.82
+        quality_ratio *= 0.88
 
     if contradiction_count:
         contradiction_penalty = min(0.72, 0.22 * contradiction_count)
@@ -931,11 +931,11 @@ def grade_answer(student_answer: dict, reference_question: dict, student_embeddi
 
     if edge_case_type == "formula_correct_calculation_wrong":
         grade_band = "formula_half_credit"
-    elif quality_ratio >= 0.82 and strong_ratio >= 0.55 and not reject_hits and contradiction_count == 0:
+    elif quality_ratio >= 0.70 and strong_ratio >= 0.40 and not reject_hits and contradiction_count == 0:
         grade_band = "correct"
-    elif contradiction_count >= 2 or (contradiction_count >= 1 and strong_ratio < 0.55):
+    elif contradiction_count >= 2 or (contradiction_count >= 1 and strong_ratio < 0.35):
         grade_band = "incorrect"
-    elif quality_ratio >= 0.45 or (concept_coverage >= 0.48 and structure_score >= 0.42):
+    elif quality_ratio >= 0.30 or (concept_coverage >= 0.30 and structure_score >= 0.25):
         grade_band = "partial"
     else:
         grade_band = "incorrect"
@@ -947,17 +947,17 @@ def grade_answer(student_answer: dict, reference_question: dict, student_embeddi
 
     score_ratio = quality_ratio
     if grade_band == "correct":
-        score_ratio = max(score_ratio, min(1.0, 0.76 + 0.16 * concept_coverage + 0.08 * strong_ratio))
+        score_ratio = max(score_ratio, min(1.0, 0.78 + 0.14 * concept_coverage + 0.08 * strong_ratio))
     elif grade_band == "partial":
-        score_ratio = min(0.74, max(score_ratio, 0.28 + 0.34 * concept_coverage + 0.1 * structure_score))
+        score_ratio = min(0.82, max(score_ratio, 0.35 + 0.38 * concept_coverage + 0.12 * structure_score))
     elif grade_band == "incorrect":
-        score_ratio = min(score_ratio, 0.44)
+        score_ratio = min(score_ratio, 0.50)
     elif grade_band == "formula_half_credit":
-        score_ratio = min(0.65, max(score_ratio, 0.45))
+        score_ratio = min(0.70, max(score_ratio, 0.50))
     if contradiction_count >= 2:
-        score_ratio = min(score_ratio, 0.3)
+        score_ratio = min(score_ratio, 0.38)
     elif contradiction_count == 1:
-        score_ratio = min(score_ratio, 0.52)
+        score_ratio = min(score_ratio, 0.58)
 
     score_ratio = float(max(0.0, min(1.0, score_ratio)))
     score = round(reference_question["max_marks"] * score_ratio, 1)

@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ApiError, getQuestionDetail, getStatus, getSummary, gradedPdfUrl, uploadStudentPDFs } from "@/lib/api";
+import { ApiError, getQuestionDetail, getStatus, getSummary, gradedPdfUrl, rawPaperUrl, uploadStudentPDFs } from "@/lib/api";
 import type { QuestionDetailResponse, StudentScore, SummaryResponse } from "@/lib/types";
 import { formatGradeBand, highlightByTerms, initials, scoreTone } from "@/lib/utils";
 
@@ -237,16 +237,23 @@ export default function DashboardExamPage({ params }: { params: { examId: string
             multiple
           />
           <div className="flex flex-wrap items-center gap-3">
-            <Button size="lg" onClick={handleStudentUpload} disabled={uploading}>
-              {uploading ? "Starting evaluation..." : "Start evaluation"}
+            <Button size="lg" onClick={handleStudentUpload} disabled={uploading || !studentFiles.length}>
+              {uploading ? (
+                <>
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                  Evaluating…
+                </>
+              ) : (
+                "Start evaluation"
+              )}
             </Button>
-            {(status === "processing_reference" || status === "processing_students") && (
-              <div className="min-w-[220px] flex-1">
-                <div className="mb-2 flex items-center justify-between text-sm text-muted-foreground">
-                  <span>Processing</span>
-                  <span>{Math.round(progress * 100)}%</span>
+            {(status === "processing_reference" || status === "processing_students" || uploading) && (
+              <div className="min-w-[200px] flex-1">
+                <div className="mb-1.5 flex items-center justify-between text-xs text-muted-foreground">
+                  <span>{uploading ? "Uploading & grading" : "Processing"}</span>
+                  <span>{uploading ? "" : `${Math.round(progress * 100)}%`}</span>
                 </div>
-                <Progress value={progress * 100} />
+                <Progress value={uploading ? 0 : progress * 100} indeterminate={uploading} />
               </div>
             )}
           </div>
@@ -284,10 +291,10 @@ export default function DashboardExamPage({ params }: { params: { examId: string
                 <button
                   key={student.roll_number}
                   onClick={() => setSelectedStudentId(student.roll_number || null)}
-                  className={`w-full rounded-3xl border p-4 text-left transition-all ${
+                  className={`w-full rounded-2xl border p-4 text-left transition-all duration-200 ${
                     selectedStudent?.roll_number === student.roll_number
-                      ? "border-primary/35 bg-primary/10"
-                      : "border-border/70 bg-background/70 hover:border-primary/20"
+                      ? "border-primary/30 bg-primary/8 shadow-sm"
+                      : "border-border/50 bg-background/60 hover:border-primary/20 hover:bg-background/80"
                   }`}
                 >
                   <div className="flex items-start gap-3">
@@ -333,7 +340,7 @@ export default function DashboardExamPage({ params }: { params: { examId: string
                 <span>Average alignment {Math.round((questionSummary?.avg_similarity || 0) * 100)}%</span>
               </div>
 
-              <div className="rounded-[28px] border border-border/70 bg-background/70 p-6">
+              <div className="rounded-2xl border border-border/50 bg-background/60 p-5">
                 <div className="metric-label mb-3">Reference answer</div>
                 <div className="whitespace-pre-wrap text-[15px] leading-8 text-foreground/95">
                   {questionData?.reference_answer.text || "Teacher answer is loading..."}
@@ -359,6 +366,13 @@ export default function DashboardExamPage({ params }: { params: { examId: string
                     <Button
                       size="sm"
                       variant="secondary"
+                      onClick={() => window.open(rawPaperUrl(examId, selectedStudent.roll_number || ""), "_blank")}
+                    >
+                      <Download className="h-4 w-4" />
+                      Original
+                    </Button>
+                    <Button
+                      size="sm"
                       onClick={() => window.open(gradedPdfUrl(examId, selectedStudent.roll_number || ""), "_blank")}
                     >
                       <Download className="h-4 w-4" />
@@ -376,7 +390,7 @@ export default function DashboardExamPage({ params }: { params: { examId: string
                 </div>
               ) : (
                 <>
-                  <div className="rounded-[28px] border border-border/70 bg-background/70 p-5">
+                  <div className="rounded-2xl border border-border/50 bg-background/60 p-5">
                     <div className="metric-label mb-2">Marks</div>
                     <div className="flex items-end justify-between gap-3">
                       <div className={`text-4xl font-semibold ${scoreTone(selectedStudent.score_ratio)}`}>
@@ -395,7 +409,7 @@ export default function DashboardExamPage({ params }: { params: { examId: string
                     <span>Confidence {Math.round(selectedStudent.grading_confidence * 100)}%</span>
                   </div>
 
-                  <div className="rounded-[28px] border border-border/70 bg-background/70 p-5">
+                  <div className="rounded-2xl border border-border/50 bg-background/60 p-5">
                     <div className="mb-3 font-semibold">Student answer</div>
                     <div className="text-[15px] leading-8 text-foreground/90">
                       {highlightedAnswer.length ? (
@@ -417,7 +431,7 @@ export default function DashboardExamPage({ params }: { params: { examId: string
                     </div>
                   </div>
 
-                  <div className="rounded-[28px] border border-border/70 bg-background/70 p-5">
+                  <div className="rounded-2xl border border-border/50 bg-background/60 p-5">
                     <div className="mb-3 font-semibold">Rubric points</div>
                     <div className="flex flex-wrap gap-2">
                       {(selectedStudent.matched_concepts || []).map((concept) => (
@@ -434,7 +448,7 @@ export default function DashboardExamPage({ params }: { params: { examId: string
                   </div>
 
                   {(selectedStudent.reject_hits?.length || selectedStudent.contradiction_count) ? (
-                    <div className="rounded-[28px] border border-rose-500/25 bg-rose-500/10 p-5">
+                    <div className="rounded-2xl border border-rose-500/25 bg-rose-500/8 p-5">
                       <div className="mb-3 font-semibold text-rose-500">Issues found</div>
                       <div className="flex flex-wrap gap-2">
                         {selectedStudent.reject_hits?.map((hit) => (
@@ -451,7 +465,7 @@ export default function DashboardExamPage({ params }: { params: { examId: string
                     </div>
                   ) : null}
 
-                  <div className="rounded-[28px] border border-border/70 bg-background/70 p-5">
+                  <div className="rounded-2xl border border-border/50 bg-background/60 p-5">
                     <div className="mb-2 font-semibold">Summary</div>
                     <p className="text-sm leading-7 text-muted-foreground">
                       {selectedStudent.feedback_summary || "No explanation available yet."}

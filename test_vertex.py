@@ -14,7 +14,7 @@ def test_vertex():
             client = genai.Client(api_key=api_key)
         print("Initialized client")
         resp = client.models.generate_content(
-            model='gemini-1.5-flash',
+            model='gemini-2.5-flash-lite',
             contents='Hello, respond with yes'
         )
         print("Response:", resp.text)

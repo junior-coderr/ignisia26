@@ -11,36 +11,30 @@ function headerCopy(pathname: string) {
   if (pathname.startsWith("/workspace")) {
     return {
       title: "Start a grading session",
-      subtitle: "Upload the teacher answer key and begin the grading flow.",
+      subtitle: "Upload the teacher answer key to begin.",
     };
   }
   if (pathname.startsWith("/dashboard/")) {
     return {
       title: "Exam dashboard",
-      subtitle: "Upload student PDFs, review scores, and inspect answers.",
+      subtitle: "Upload student PDFs, review scores, inspect answers.",
     };
   }
   if (pathname.startsWith("/clusters/")) {
     return {
       title: "Answer clusters",
-      subtitle: "Review grouped answer patterns for the selected question.",
+      subtitle: "Student groups by performance band.",
     };
   }
   if (pathname.startsWith("/export/")) {
     return {
       title: "Export results",
-      subtitle: "Download or review the final marks for this exam.",
-    };
-  }
-  if (pathname.startsWith("/analytics/")) {
-    return {
-      title: "Analytics",
-      subtitle: "View class performance and processing metrics.",
+      subtitle: "Download final marks for this exam.",
     };
   }
   return {
     title: "GradeSync",
-    subtitle: "Simple grading workflow for teachers.",
+    subtitle: "AI-powered grading workflow.",
   };
 }
 
@@ -49,18 +43,18 @@ export function Topbar() {
   const { title, subtitle } = headerCopy(pathname);
 
   return (
-    <header className="sticky top-0 z-30 border-b border-border/70 bg-background/80 backdrop-blur-2xl">
-      <div className="flex min-h-20 items-center gap-4 px-4 py-4 sm:px-6">
+    <header className="sticky top-0 z-30 border-b border-border/50 bg-background/85 backdrop-blur-2xl">
+      <div className="flex h-16 items-center gap-4 px-5">
         <div className="min-w-0">
-          <div className="text-lg font-semibold tracking-tight">{title}</div>
-          <div className="text-sm text-muted-foreground">{subtitle}</div>
+          <div className="text-[15px] font-semibold tracking-tight">{title}</div>
+          <div className="text-xs text-muted-foreground">{subtitle}</div>
         </div>
 
         <div className="ml-auto flex items-center gap-2">
           {pathname !== "/workspace" ? (
-            <Button asChild variant="secondary" size="sm">
+            <Button asChild variant="ghost" size="sm">
               <Link href="/workspace">
-                <ArrowLeft className="h-4 w-4" />
+                <ArrowLeft className="h-3.5 w-3.5" />
                 New session
               </Link>
             </Button>

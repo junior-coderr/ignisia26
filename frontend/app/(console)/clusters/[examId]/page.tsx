@@ -2,11 +2,17 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, BookOpen, ChevronDown, ChevronUp, TrendingDown, TrendingUp, Users } from "lucide-react";
+import dynamic from "next/dynamic";
+import { ArrowLeft, BookOpen, ChevronDown, ChevronUp, Layers3, List, TrendingDown, TrendingUp, Users } from "lucide-react";
 
 import { ApiError, getExamClusters, getSummary } from "@/lib/api";
 import type { ClusterGroup, ClustersResponse, SummaryResponse } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+const ClusterVisualization3D = dynamic(
+  () => import("@/components/clusters/cluster-3d"),
+  { ssr: false, loading: () => <div className="flex h-[520px] items-center justify-center rounded-2xl bg-muted/30 text-sm text-muted-foreground">Loading 3D view…</div> },
+);
 
 // ── Band config ──────────────────────────────────────────────────────────────
 
@@ -226,6 +232,7 @@ export default function ClusterPage({ params }: { params: { examId: string } }) 
   const [clusters, setClusters] = useState<ClustersResponse>({});
   const [questionId, setQuestionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [view, setView] = useState<"cards" | "3d">("cards");
 
   useEffect(() => {
     let cancelled = false;
@@ -341,13 +348,47 @@ export default function ClusterPage({ params }: { params: { examId: string } }) 
         </div>
       )}
 
-      {/* ── Band cards ─────────────────────────────────────────────── */}
+      {/* ── View toggle ────────────────────────────────────────────── */}
+      {activeClusters.length > 0 && (
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setView("cards")}
+            className={cn(
+              "flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition-all",
+              view === "cards"
+                ? "border-primary bg-primary text-primary-foreground shadow-sm"
+                : "border-border/70 bg-card text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <List className="h-3.5 w-3.5" /> Cards
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("3d")}
+            className={cn(
+              "flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition-all",
+              view === "3d"
+                ? "border-primary bg-primary text-primary-foreground shadow-sm"
+                : "border-border/70 bg-card text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Layers3 className="h-3.5 w-3.5" /> 3D Galaxy
+          </button>
+        </div>
+      )}
+
+      {/* ── Content ─────────────────────────────────────────────────── */}
       {activeClusters.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-border/70 bg-card/60 p-10 text-center">
           <div className="text-2xl mb-2">📊</div>
           <p className="text-sm text-muted-foreground">
             No clusters yet for this question. Upload and grade student PDFs to see bands appear here.
           </p>
+        </div>
+      ) : view === "3d" ? (
+        <div className="rounded-2xl border border-border/70 overflow-hidden">
+          <ClusterVisualization3D clusters={activeClusters} />
         </div>
       ) : (
         <div className="space-y-4">

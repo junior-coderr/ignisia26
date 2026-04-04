@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, lazy, Suspense } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useNavigate, useParams } from 'react-router-dom'
 import { getExamClusters, getSummary } from '../api'
+
+const ClusterVisualization3D = lazy(() => import('../components/ClusterVisualization3D'))
 
 function formatGradeBand(band) {
   if (!band) return 'Mixed'
@@ -122,6 +124,7 @@ export default function ClusterScreen() {
   const [clustersData, setClustersData] = useState({})
   const [selectedQ, setSelectedQ] = useState(null)
   const [error, setError] = useState(null)
+  const [view, setView] = useState('cards')
 
   useEffect(() => {
     let intervalId
@@ -254,11 +257,37 @@ export default function ClusterScreen() {
               <p style={{ color: 'var(--text-muted)' }}>Clustering is still processing or there were not enough student answers for this question.</p>
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              {currentClusters.map((cluster) => (
-                <ClusterCard key={cluster.cluster_id} cluster={cluster} />
-              ))}
-            </div>
+            <>
+              {/* View toggle */}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+                <button
+                  className={`btn btn-sm ${view === 'cards' ? '' : 'btn-secondary'}`}
+                  style={view === 'cards' ? { background: 'var(--accent)', color: '#fff' } : {}}
+                  onClick={() => setView('cards')}
+                >
+                  📋 Cards
+                </button>
+                <button
+                  className={`btn btn-sm ${view === '3d' ? '' : 'btn-secondary'}`}
+                  style={view === '3d' ? { background: 'var(--accent)', color: '#fff' } : {}}
+                  onClick={() => setView('3d')}
+                >
+                  🌌 3D Galaxy
+                </button>
+              </div>
+
+              {view === '3d' ? (
+                <Suspense fallback={<div style={{ height: 520, display: 'grid', placeItems: 'center', color: 'var(--text-muted)' }}>Loading 3D view…</div>}>
+                  <ClusterVisualization3D clusters={currentClusters} />
+                </Suspense>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                  {currentClusters.map((cluster) => (
+                    <ClusterCard key={cluster.cluster_id} cluster={cluster} />
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </main>
       </div>
