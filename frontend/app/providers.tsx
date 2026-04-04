@@ -9,9 +9,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
       {children}
       <Toaster
         richColors
-        position="top-right"
+        position="bottom-right"
         toastOptions={{
-          className: "rounded-2xl border border-border/70 bg-card/90 text-foreground backdrop-blur-xl",
+          className: "rounded-xl border border-border/50 bg-card/95 text-foreground backdrop-blur-xl text-sm",
+          duration: 3500,
         }}
       />
     </ThemeProvider>

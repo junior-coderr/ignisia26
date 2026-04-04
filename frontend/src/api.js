@@ -32,4 +32,7 @@ export const exportCSVUrl = (examId) => `/api/exam/${examId}/export`
 export const gradedPdfUrl = (examId, rollNumber) =>
   `/api/exam/${examId}/student/${encodeURIComponent(rollNumber)}/graded-pdf`
 
+export const rawPaperUrl = (examId, rollNumber) =>
+  `/api/exam/${examId}/student/${encodeURIComponent(rollNumber)}/raw-paper`
+
 export default api

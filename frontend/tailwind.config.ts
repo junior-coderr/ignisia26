@@ -57,10 +57,21 @@ const config: Config = {
           "0%, 100%": { transform: "translateY(0px)" },
           "50%": { transform: "translateY(-8px)" },
         },
+        indeterminate: {
+          "0%": { transform: "translateX(-100%)" },
+          "50%": { transform: "translateX(200%)" },
+          "100%": { transform: "translateX(-100%)" },
+        },
+        fadeIn: {
+          "0%": { opacity: "0", transform: "translateY(8px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
       },
       animation: {
         shimmer: "shimmer 2.6s linear infinite",
         float: "float 5s ease-in-out infinite",
+        indeterminate: "indeterminate 1.5s ease-in-out infinite",
+        "fade-in": "fadeIn 0.3s ease-out",
       },
     },
   },

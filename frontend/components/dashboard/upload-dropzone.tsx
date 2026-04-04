@@ -1,12 +1,18 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { motion } from "framer-motion";
-import { FilePlus2, FileText, UploadCloud, X } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { FilePlus2, FileText, UploadCloud, X, CheckCircle2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+function formatSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
 
 export function UploadDropzone({
   title,
@@ -31,45 +37,67 @@ export function UploadDropzone({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <motion.button
         type="button"
-        whileHover={{ scale: 1.01 }}
-        whileTap={{ scale: 0.995 }}
-        onDragOver={(event) => {
+        whileHover={{ scale: 1.005 }}
+        whileTap={{ scale: 0.998 }}
+        onDragOver={(event: React.DragEvent) => {
           event.preventDefault();
           setIsDragging(true);
         }}
         onDragLeave={() => setIsDragging(false)}
-        onDrop={(event) => {
+        onDrop={(event: React.DragEvent) => {
           event.preventDefault();
           setIsDragging(false);
           addFiles(event.dataTransfer.files);
         }}
         onClick={() => inputRef.current?.click()}
         className={cn(
-          "group relative flex min-h-[220px] w-full flex-col items-center justify-center overflow-hidden rounded-[28px] border border-dashed px-8 py-12 text-center transition-all",
+          "group relative flex w-full flex-col items-center justify-center overflow-hidden rounded-2xl border border-dashed px-8 py-10 text-center transition-all duration-300",
           isDragging
-            ? "border-primary bg-primary/10 shadow-glow"
-            : "border-border/70 bg-card/70 hover:border-primary/40 hover:bg-card",
+            ? "border-primary/60 bg-primary/8 shadow-[0_0_0_2px_rgba(37,99,235,0.12)]"
+            : files.length > 0
+              ? "border-success/40 bg-success/4"
+              : "border-border/60 bg-card/50 hover:border-primary/30 hover:bg-card/70",
         )}
       >
-        <div className="absolute inset-0 bg-hero-grid bg-[size:28px_28px] opacity-[0.06]" />
-        <div className="absolute -left-10 top-10 h-24 w-24 rounded-full bg-primary/15 blur-3xl" />
-        <div className="absolute bottom-10 right-0 h-28 w-28 rounded-full bg-cyan-400/15 blur-3xl" />
+        {/* Subtle grid background */}
+        <div className="absolute inset-0 bg-hero-grid bg-[size:20px_20px] opacity-[0.04]" />
 
-        <div className="relative flex h-16 w-16 items-center justify-center rounded-3xl bg-[linear-gradient(135deg,#2563eb,#22d3ee)] text-white shadow-glow">
-          {multiple ? <UploadCloud className="h-7 w-7" /> : <FilePlus2 className="h-7 w-7" />}
+        <div className={cn(
+          "relative flex h-12 w-12 items-center justify-center rounded-2xl transition-all duration-300",
+          files.length > 0
+            ? "bg-success/15 text-success"
+            : "bg-primary/10 text-primary group-hover:bg-primary/15",
+        )}>
+          {files.length > 0 ? (
+            <CheckCircle2 className="h-6 w-6" />
+          ) : multiple ? (
+            <UploadCloud className="h-6 w-6" />
+          ) : (
+            <FilePlus2 className="h-6 w-6" />
+          )}
         </div>
-        <div className="relative mt-6 space-y-2">
-          <h3 className="text-xl font-semibold tracking-tight">{title}</h3>
-          <p className="max-w-xl text-sm leading-6 text-muted-foreground">{subtitle}</p>
+
+        <div className="relative mt-4 space-y-1">
+          <h3 className="text-base font-medium tracking-tight">
+            {files.length > 0
+              ? `${files.length} file${files.length > 1 ? "s" : ""} selected`
+              : title}
+          </h3>
+          <p className="max-w-md text-sm leading-relaxed text-muted-foreground">
+            {files.length > 0
+              ? "Click to add more or drag additional files"
+              : subtitle}
+          </p>
         </div>
-        <div className="relative mt-5 flex flex-wrap items-center justify-center gap-2">
+
+        <div className="relative mt-4 flex flex-wrap items-center justify-center gap-2">
           <Badge variant="info">PDF</Badge>
-          <Badge variant="neutral">Structured OCR</Badge>
-          <Badge variant="neutral">Question-linked extraction</Badge>
+          <Badge variant="neutral">Images</Badge>
         </div>
+
         <input
           ref={inputRef}
           type="file"
@@ -80,36 +108,40 @@ export function UploadDropzone({
         />
       </motion.button>
 
-      {files.length ? (
-        <div className="grid gap-3 md:grid-cols-2">
-          {files.map((file, index) => (
-            <div
-              key={`${file.name}-${index}`}
-              className="flex items-center gap-3 rounded-2xl border border-border/70 bg-card/70 px-4 py-3"
-            >
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-                <FileText className="h-5 w-5" />
+      {/* File list */}
+      <AnimatePresence mode="popLayout">
+        {files.map((file, index) => (
+          <motion.div
+            key={`${file.name}-${file.size}`}
+            initial={{ opacity: 0, height: 0, y: -8 }}
+            animate={{ opacity: 1, height: "auto", y: 0 }}
+            exit={{ opacity: 0, height: 0, y: -8 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="overflow-hidden"
+          >
+            <div className="flex items-center gap-3 rounded-xl border border-border/50 bg-card/60 px-4 py-2.5">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/8 text-primary">
+                <FileText className="h-4 w-4" />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{file.name}</div>
-                <div className="text-xs text-muted-foreground">
-                  {(file.size / 1024 / 1024).toFixed(2)} MB
-                </div>
+                <div className="text-xs text-muted-foreground">{formatSize(file.size)}</div>
               </div>
               <Button
                 size="icon"
                 variant="ghost"
+                className="h-8 w-8 shrink-0 rounded-lg"
                 onClick={(event) => {
                   event.stopPropagation();
                   onFilesChange(files.filter((_, fileIndex) => fileIndex !== index));
                 }}
               >
-                <X className="h-4 w-4" />
+                <X className="h-3.5 w-3.5" />
               </Button>
             </div>
-          ))}
-        </div>
-      ) : null}
+          </motion.div>
+        ))}
+      </AnimatePresence>
     </div>
   );
 }

@@ -28,7 +28,7 @@ _LOCATION = (
     or os.getenv("VERTEX_LOCATION")
     or os.getenv("VERTEX_AI_LOCATION")
 )
-DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 MODEL_FALLBACKS = [
     DEFAULT_GEMINI_MODEL,
     "gemini-2.0-flash",

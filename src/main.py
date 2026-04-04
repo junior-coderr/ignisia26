@@ -795,6 +795,47 @@ async def download_graded_pdf(exam_id: str, roll_number: str):
     )
 
 
+@app.get("/api/exam/{exam_id}/student/{roll_number}/raw-paper")
+async def download_raw_paper(exam_id: str, roll_number: str):
+    """Download the original un-annotated student answer sheet."""
+    exam = _get_exam(exam_id)
+
+    student = None
+    for s in exam.get("students", []):
+        if s.get("roll_number") == roll_number:
+            student = s
+            break
+    if not student:
+        raise HTTPException(404, f"Student {roll_number} not found")
+
+    source_pdf = student.get("source_pdf", "")
+    exam_dir = UPLOAD_DIR / exam_id / "students"
+    source_path = exam_dir / source_pdf if source_pdf else None
+
+    if not source_path or not source_path.exists():
+        raise HTTPException(404, "Original paper file not found on disk")
+
+    suffix = source_path.suffix.lower()
+    media_types = {
+        ".pdf": "application/pdf",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".bmp": "image/bmp",
+        ".tiff": "image/tiff",
+        ".tif": "image/tiff",
+    }
+    media = media_types.get(suffix, "application/octet-stream")
+    safe_name = f"original_{roll_number}_{exam_id}{suffix}"
+
+    return StreamingResponse(
+        open(source_path, "rb"),
+        media_type=media,
+        headers={"Content-Disposition": f"attachment; filename={safe_name}"},
+    )
+
+
 @app.get("/api/exam/{exam_id}/export")
 def export_results_csv(exam_id: str):
     exam = _get_exam(exam_id)
