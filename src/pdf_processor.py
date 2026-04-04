@@ -4,6 +4,7 @@ PDF extraction for reference answer keys and student submissions.
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
+import re
 
 import fitz  # PyMuPDF
 from dotenv import load_dotenv
@@ -15,7 +16,7 @@ from gemini_compat import (
     make_inline_part,
     response_text,
 )
-from similarity_engine import merge_answer_records
+from similarity_engine import merge_answer_records, normalize_question_id
 
 load_dotenv()
 
@@ -98,6 +99,15 @@ Rules:
 - Return JSON only."""
 
 
+QUESTION_HEADER_RE = re.compile(
+    r"^\s*Q(?P<q_number>\d+[A-Z]?)\.\s*\((?P<header>[^)]*marks?[^)]*)\)\s*(?P<body>.*)$",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+QUESTION_START_RE = re.compile(
+    r"(?im)^\s*Q(?P<q_number>\d+[A-Z]?)\.\s*\((?P<header>[^)]*marks?[^)]*)\)"
+)
+
+
 def _page_to_jpg(pdf_doc, page_num: int, quality: int = 85) -> bytes:
     page = pdf_doc[page_num]
     pix = page.get_pixmap(matrix=fitz.Matrix(_RENDER_SCALE, _RENDER_SCALE))
@@ -118,6 +128,183 @@ def _parse_json_response(text: str) -> dict | list:
         if text.startswith("json"):
             text = text[4:]
     return json.loads(text.strip())
+
+
+def _normalize_page_text(text: str) -> str:
+    normalized = (text or "").replace("\r", "\n")
+    normalized = normalized.replace("\u00a0", " ")
+    normalized = re.sub(r"[ \t]+\n", "\n", normalized)
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
+    return normalized.strip()
+
+
+def _extract_page_texts(pdf_doc) -> list[str]:
+    return [_normalize_page_text(page.get_text("text")) for page in pdf_doc]
+
+
+def _extract_label_value(text: str, labels: list[str]) -> str | None:
+    for label in labels:
+        match = re.search(rf"{label}\s*:?\s*([^\n]+)", text, flags=re.IGNORECASE)
+        if match:
+            value = match.group(1).strip(" :-")
+            if value and value.lower() not in {"student input", "field"}:
+                return value
+    return None
+
+
+def _is_text_extractable(page_texts: list[str]) -> bool:
+    combined = "\n".join(page_texts)
+    if len(re.findall(r"[0-9A-Za-z\u0900-\u097F]", combined)) < 160:
+        return False
+    return bool(re.search(r"(?im)^\s*Q\d+[A-Z]?\.\s*\(", combined))
+
+
+def _extract_question_chunks(page_texts: list[str]) -> list[dict]:
+    chunks: list[dict] = []
+    current: dict | None = None
+
+    for page_number, page_text in enumerate(page_texts, start=1):
+        if not page_text:
+            continue
+
+        matches = list(QUESTION_START_RE.finditer(page_text))
+        if not matches:
+            if current is not None:
+                current["body_parts"].append(page_text.strip())
+                if page_number not in current["source_pages"]:
+                    current["source_pages"].append(page_number)
+            continue
+
+        prefix = page_text[:matches[0].start()].strip()
+        if prefix and current is not None:
+            current["body_parts"].append(prefix)
+            if page_number not in current["source_pages"]:
+                current["source_pages"].append(page_number)
+
+        for index, match in enumerate(matches):
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(page_text)
+            chunk_text = page_text[match.start():end].strip()
+            entry = {
+                "q_number": f"Q{match.group('q_number').upper()}",
+                "body_parts": [chunk_text],
+                "source_pages": [page_number],
+            }
+            chunks.append(entry)
+            current = entry
+
+    return chunks
+
+
+def _split_question_body(body: str) -> tuple[str | None, str]:
+    parts = re.split(r"\bAnswer\s*:\s*", body or "", maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) == 2:
+        q_text, answer_text = parts
+    else:
+        q_text, answer_text = body or "", ""
+
+    q_text = q_text.strip() or None
+    answer_text = re.sub(r"\n?\s*End of Paper\s*$", "", answer_text.strip(), flags=re.IGNORECASE)
+    return q_text, answer_text.strip()
+
+
+def _marks_from_header(header: str | None) -> float | None:
+    if not header:
+        return None
+    match = re.search(r"(\d+(?:\.\d+)?)", header)
+    if not match:
+        return None
+    return float(match.group(1))
+
+
+def _diagram_excerpt(text: str) -> str | None:
+    if not text:
+        return None
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    diagram_lines = [line for line in lines if any(symbol in line for symbol in ("↓", "→", "->", "-->"))]
+    if len(diagram_lines) >= 2:
+        return " | ".join(diagram_lines[:8])[:400]
+    if any(symbol in text for symbol in ("↓", "→", "->", "-->")):
+        return "Text-based process flow detected."
+    return None
+
+
+def _question_record_from_chunk(chunk: dict, include_max_marks: bool) -> dict | None:
+    full_chunk = "\n".join(part for part in chunk.get("body_parts", []) if part).strip()
+    header_match = QUESTION_HEADER_RE.match(full_chunk)
+    if not header_match:
+        return None
+
+    q_number = normalize_question_id(header_match.group("q_number"))
+    if not q_number:
+        return None
+
+    q_text, answer_text = _split_question_body(header_match.group("body"))
+    diagram_description = _diagram_excerpt(answer_text)
+
+    record = {
+        "q_number": q_number,
+        "q_text": q_text,
+        "text": answer_text,
+        "diagram_present": bool(diagram_description),
+        "diagram_description": diagram_description,
+        "source_pages": list(chunk.get("source_pages", [])),
+        "attempted": bool(answer_text.strip()),
+    }
+    if include_max_marks:
+        record["max_marks"] = _marks_from_header(header_match.group("header"))
+    return record
+
+
+def _extract_student_metadata_from_text(page_texts: list[str]) -> dict:
+    cover_text = page_texts[0] if page_texts else ""
+    return {
+        "student_name": _extract_label_value(cover_text, ["Student Name"]),
+        "roll_number": _extract_label_value(cover_text, ["Student ID / Roll No", "Roll Number", "Roll No", "Student ID"]),
+        "exam_code": _extract_label_value(cover_text, ["Subject / Course", "Exam Code", "Course"]),
+    }
+
+
+def _extract_student_answers_from_text(pdf_doc) -> list:
+    page_texts = _extract_page_texts(pdf_doc)
+    if not _is_text_extractable(page_texts):
+        return []
+
+    answers = []
+    for chunk in _extract_question_chunks(page_texts):
+        record = _question_record_from_chunk(chunk, include_max_marks=False)
+        if record:
+            answers.append(record)
+
+    return merge_answer_records(
+        [answer for answer in answers if answer.get("attempted", True)],
+        include_max_marks=False,
+    )
+
+
+def _extract_reference_answers_from_text(pdf_doc) -> dict | None:
+    page_texts = _extract_page_texts(pdf_doc)
+    if not _is_text_extractable(page_texts):
+        return None
+
+    questions = []
+    for chunk in _extract_question_chunks(page_texts):
+        record = _question_record_from_chunk(chunk, include_max_marks=True)
+        if record:
+            questions.append(record)
+
+    if not questions:
+        return None
+
+    combined = "\n".join(page_texts)
+    exam_title = _extract_label_value(combined, ["EXAMINATION", "Exam Title", "Institution Name"])
+    exam_code = _extract_label_value(combined, ["Subject / Course", "Exam Code", "Course"])
+
+    return {
+        "exam_title": exam_title,
+        "exam_code": exam_code,
+        "questions": merge_answer_records(questions, include_max_marks=True),
+    }
 
 
 def _build_image_contents(pdf_doc, start_page: int, prompt: str) -> list:
@@ -309,7 +496,12 @@ def process_student_pdf(pdf_path: str) -> dict:
         return {"error": "Empty Document", "student_metadata": {}, "answers": []}
 
     try:
-        if gemini_enabled():
+        direct_answers = _extract_student_answers_from_text(doc)
+        direct_metadata = _extract_student_metadata_from_text(_extract_page_texts(doc))
+        if direct_answers:
+            metadata = direct_metadata
+            answers = direct_answers
+        elif gemini_enabled():
             # Pre-render cover page only once, reuse for metadata call
             cover_jpg = _page_to_jpg(doc, 0)
             cover_part = make_inline_part(data=cover_jpg, mime_type="image/jpeg")
@@ -368,6 +560,10 @@ def process_reference_pdf(pdf_path: str) -> dict:
     if len(doc) == 0:
         return {"error": "Empty Document", "exam_title": None, "exam_code": None, "questions": []}
 
-    extracted = extract_reference_answers(doc)
-    doc.close()
-    return extracted
+    try:
+        direct_extracted = _extract_reference_answers_from_text(doc)
+        if direct_extracted and direct_extracted.get("questions"):
+            return direct_extracted
+        return extract_reference_answers(doc)
+    finally:
+        doc.close()

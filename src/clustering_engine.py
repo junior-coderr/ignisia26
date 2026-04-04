@@ -312,11 +312,12 @@ def run_clustering_for_question(q_number: str, reference_data: dict, students_da
         pattern = _build_common_pattern(band_items, band_kind)
         recommendation = _build_teaching_recommendation(band_items, band_kind)
 
+        cluster_name = f"{band_label} ({len(band_items)} students)"
         results.append({
             # Core identity
             "cluster_id": str(cluster_id),
-            "cluster_name": f"{band_label} ({len(band_items)} students)",
-            "label": band_label,
+            "cluster_name": cluster_name,
+            "label": cluster_name,
 
             # Band metadata
             "cluster_kind": band_kind,

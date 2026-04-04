@@ -4,6 +4,7 @@ Embedding, rubric, and grading helpers for reference-answer evaluation.
 import os
 import re
 from collections import Counter
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Iterable
 
@@ -251,8 +252,29 @@ def _normalize_text(text: str | None) -> str:
     return re.sub(r"\s+", " ", (text or "").strip()).lower()
 
 
+def _canonical_match_text(text: str | None) -> str:
+    normalized = _normalize_text(text)
+    normalized = normalized.replace("–", "-").replace("—", "-").replace("−", "-")
+    normalized = normalized.replace("→", " ").replace("↓", " ")
+    normalized = re.sub(r"[^0-9a-z\u0900-\u097f]+", " ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
 def _tokenize(text: str) -> list[str]:
     return re.findall(r"[0-9A-Za-z\u0900-\u097F]+", _normalize_text(text))
+
+
+def _token_overlap_ratio(reference_tokens: list[str], student_tokens: list[str]) -> float:
+    if not reference_tokens or not student_tokens:
+        return 0.0
+
+    reference_counts = Counter(reference_tokens)
+    student_counts = Counter(student_tokens)
+    shared = sum(min(reference_counts[token], student_counts[token]) for token in reference_counts)
+    total = max(sum(reference_counts.values()), sum(student_counts.values()))
+    if total <= 0:
+        return 0.0
+    return float(shared / total)
 
 
 def _stem_token(token: str) -> str:
@@ -628,12 +650,86 @@ def build_reference_profile(question: dict) -> dict:
     }
 
 
+def _exact_match_grade(student_text: str, reference_question: dict) -> dict | None:
+    reference_text = reference_question.get("answer_text") or make_answer_text(reference_question)
+    canonical_reference = _canonical_match_text(reference_text)
+    canonical_student = _canonical_match_text(student_text)
+    if not canonical_reference or not canonical_student:
+        return None
+
+    reference_tokens = canonical_reference.split()
+    student_tokens = canonical_student.split()
+    sequence_ratio = SequenceMatcher(None, canonical_reference, canonical_student).ratio()
+    token_overlap = _token_overlap_ratio(reference_tokens, student_tokens)
+    length_ratio = min(len(student_tokens), len(reference_tokens)) / max(1, max(len(student_tokens), len(reference_tokens)))
+    containment = (
+        canonical_student in canonical_reference
+        or canonical_reference in canonical_student
+    )
+
+    is_exact_match = canonical_reference == canonical_student
+    is_near_exact_match = (
+        sequence_ratio >= 0.985 and token_overlap >= 0.97 and length_ratio >= 0.93
+    ) or (
+        containment and token_overlap >= 0.985 and length_ratio >= 0.97
+    )
+    if not (is_exact_match or is_near_exact_match):
+        return None
+
+    rubric_segments = reference_question.get("rubric_segments") or _split_segments(reference_text)
+    rubric_concept_ids = reference_question.get("rubric_concept_ids") or [f"C{index + 1}" for index in range(len(rubric_segments))]
+    rubric_weights = reference_question.get("rubric_weights") or (
+        [round(1.0 / len(rubric_segments), 4) for _ in rubric_segments] if rubric_segments else []
+    )
+    rubric_concepts = [
+        {
+            "id": rubric_concept_ids[index] if index < len(rubric_concept_ids) else f"C{index + 1}",
+            "concept": concept,
+            "status": "matched",
+            "match_score": 1.0,
+            "coverage": 1.0,
+            "weight": rubric_weights[index] if index < len(rubric_weights) else 0.0,
+            "matched_excerpt": student_text[:400] if student_text else None,
+            "contradiction_hits": [],
+        }
+        for index, concept in enumerate(rubric_segments)
+    ]
+
+    reference_keywords = reference_question.get("rubric_keywords") or _extract_keywords(reference_text)
+    return {
+        "score": round(reference_question["max_marks"], 1),
+        "similarity": 1.0,
+        "raw_similarity": 1.0,
+        "concept_coverage": 1.0,
+        "keyword_coverage": 1.0 if reference_keywords else 1.0,
+        "structure_score": 1.0,
+        "formula_score": 1.0 if str(reference_question.get("formula_expected") or "").strip() else 0.0,
+        "numeric_score": 1.0 if str(reference_question.get("final_numeric_answer") or "").strip() else 0.0,
+        "strong_concept_ratio": 1.0,
+        "matched_keywords": reference_keywords,
+        "matched_keyword_highlights": _keyword_highlights(student_text, reference_keywords),
+        "missing_keywords": [],
+        "rubric_concepts": rubric_concepts,
+        "matched_concepts": [entry["concept"] for entry in rubric_concepts],
+        "matched_concept_ids": [entry["id"] for entry in rubric_concepts],
+        "missed_concepts": [],
+        "missed_concept_ids": [],
+        "grade_band": "correct",
+        "edge_case": None,
+        "edge_case_confidence": 0.0,
+        "score_ratio": 1.0,
+        "semantic_signal": 1.0,
+        "grading_confidence": 0.99,
+        "feedback_summary": "Answer matches the reference answer closely enough to award full credit.",
+        "reject_hits": [],
+        "contradiction_hits": [],
+        "contradiction_count": 0,
+        "grading_method": "exact_match",
+    }
+
+
 def grade_answer(student_answer: dict, reference_question: dict, student_embedding: np.ndarray) -> dict:
     reference_text = reference_question.get("answer_text") or make_answer_text(reference_question)
-    reference_embedding = reference_question.get("answer_embedding")
-    if reference_embedding is None:
-        reference_embedding = encode_texts([reference_text])[0]
-
     student_text = make_answer_text(student_answer)
     if not student_text:
         return {
@@ -660,6 +756,15 @@ def grade_answer(student_answer: dict, reference_question: dict, student_embeddi
             "grading_method": "deterministic",
             "answer_embedding_vector": student_embedding.tolist(),
         }
+
+    exact_match_grade = _exact_match_grade(student_text, reference_question)
+    if exact_match_grade is not None:
+        exact_match_grade["answer_embedding_vector"] = student_embedding.tolist()
+        return exact_match_grade
+
+    reference_embedding = reference_question.get("answer_embedding")
+    if reference_embedding is None:
+        reference_embedding = encode_texts([reference_text])[0]
 
     global_similarity = cosine_similarity_score(student_embedding, reference_embedding)
     global_similarity_scaled = _scale_similarity(global_similarity, low=0.28, high=0.86)
