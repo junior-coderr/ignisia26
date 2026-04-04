@@ -1,0 +1,73 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 210 50% 99%;
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --muted: 214 32% 96%;
+  --muted-foreground: 215 16% 47%;
+  --primary: 221 83% 53%;
+  --primary-foreground: 0 0% 100%;
+  --accent: 199 89% 48%;
+  --accent-foreground: 0 0% 100%;
+  --success: 152 76% 40%;
+  --warning: 38 92% 50%;
+  --danger: 0 84% 60%;
+  --border: 214 32% 91%;
+  --input: 214 32% 91%;
+  --ring: 221 83% 53%;
+}
+
+.dark {
+  --background: 222 47% 9%;
+  --foreground: 210 40% 98%;
+  --card: 222 38% 12%;
+  --card-foreground: 210 40% 98%;
+  --muted: 222 28% 18%;
+  --muted-foreground: 215 20% 72%;
+  --primary: 217 91% 60%;
+  --primary-foreground: 210 40% 98%;
+  --accent: 191 91% 50%;
+  --accent-foreground: 210 40% 98%;
+  --success: 152 76% 44%;
+  --warning: 38 92% 56%;
+  --danger: 0 84% 65%;
+  --border: 217 25% 19%;
+  --input: 217 25% 19%;
+  --ring: 217 91% 60%;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: var(--font-sans), sans-serif;
+    background-image:
+      radial-gradient(circle at top, rgba(37, 99, 235, 0.1), transparent 34%),
+      radial-gradient(circle at 80% 20%, rgba(34, 211, 238, 0.08), transparent 24%);
+  }
+}
+
+@layer components {
+  .glass-panel {
+    @apply border border-white/10 bg-white/60 backdrop-blur-2xl dark:bg-slate-950/40;
+  }
+
+  .section-grid {
+    @apply grid gap-6 xl:grid-cols-[1.2fr,0.8fr];
+  }
+
+  .metric-label {
+    @apply text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground;
+  }
+}

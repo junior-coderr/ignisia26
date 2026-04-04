@@ -7,3 +7,5 @@ sentence-transformers
 PyMuPDF
 python-dotenv
 pydantic
+scikit-learn
+groq

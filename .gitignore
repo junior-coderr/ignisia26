@@ -31,6 +31,7 @@ wheels/
 # Node / Frontend
 node_modules/
 frontend/node_modules/
+frontend/.next/
 frontend/dist/
 dist/
 .npm
@@ -42,6 +43,7 @@ yarn-error.log*
 # Project Specific
 src/uploads/
 uploads/
+.hf_cache/
 
 # OS
 .DS_Store

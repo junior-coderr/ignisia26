@@ -23,6 +23,10 @@ export const getQuestionDetail = (examId, qNumber) =>
 
 export const getResults = (examId) => api.get(`/exam/${examId}/results`)
 
+export const getExamClusters = (examId) => api.get(`/exam/${examId}/clusters`)
+
+export const getExamMetrics = (examId) => api.get(`/exam/${examId}/metrics`)
+
 export const exportCSVUrl = (examId) => `/api/exam/${examId}/export`
 
 export default api

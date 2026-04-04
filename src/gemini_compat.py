@@ -20,36 +20,68 @@ legacy_genai = None
 
 _CLIENT_KIND: str | None = None
 _CLIENT: Any = None
-_API_KEY = os.getenv("GEMINI_API_KEY")
-DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+_USE_VERTEX = str(os.getenv("GOOGLE_GENAI_USE_VERTEXAI", "")).strip().lower() in {"1", "true", "yes"}
+_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("VERTEX_PROJECT_ID")
+_LOCATION = (
+    os.getenv("GOOGLE_CLOUD_LOCATION")
+    or os.getenv("VERTEX_LOCATION")
+    or os.getenv("VERTEX_AI_LOCATION")
+)
+DEFAULT_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 MODEL_FALLBACKS = [
     DEFAULT_GEMINI_MODEL,
-    "gemini-flash-lite-latest",
+    "gemini-2.0-flash",
     "gemini-2.0-flash-lite",
 ]
 
-if _API_KEY:
-    try:
-        from google import genai as google_genai
-        from google.genai import types as google_genai_types
-    except ImportError:
-        google_genai = None
-        google_genai_types = None
+try:
+    from google import genai as google_genai
+    from google.genai import types as google_genai_types
+except ImportError:
+    google_genai = None
+    google_genai_types = None
 
-    try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            import google.generativeai as legacy_genai
-    except ImportError:
-        legacy_genai = None
+try:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        import google.generativeai as legacy_genai
+except ImportError:
+    legacy_genai = None
 
-    if google_genai is not None:
-        _CLIENT = google_genai.Client(api_key=_API_KEY)
+
+def _init_google_genai_client():
+    if google_genai is None:
+        return None
+
+    if _USE_VERTEX and _PROJECT and _LOCATION:
+        return google_genai.Client(vertexai=True, project=_PROJECT, location=_LOCATION)
+
+    if _API_KEY:
+        try:
+            # Vertex AI express mode uses an API key while still targeting Vertex.
+            return google_genai.Client(vertexai=True, api_key=_API_KEY)
+        except Exception:
+            return google_genai.Client(api_key=_API_KEY)
+
+    if _PROJECT and _LOCATION:
+        return google_genai.Client(vertexai=True, project=_PROJECT, location=_LOCATION)
+
+    return None
+
+
+try:
+    _CLIENT = _init_google_genai_client()
+    if _CLIENT is not None:
         _CLIENT_KIND = "google_genai"
-    elif legacy_genai is not None:
+    elif legacy_genai is not None and _API_KEY:
         legacy_genai.configure(api_key=_API_KEY)
         _CLIENT = legacy_genai
         _CLIENT_KIND = "google_generativeai"
+except Exception as exc:
+    warnings.warn(f"Gemini client initialization failed: {exc}")
+    _CLIENT = None
+    _CLIENT_KIND = None
 
 
 def gemini_enabled() -> bool:
@@ -104,3 +136,37 @@ def response_text(response: Any) -> str:
         return ""
 
     return getattr(parts[0], "text", "") or ""
+
+
+def response_usage(response: Any) -> dict:
+    usage = getattr(response, "usage_metadata", None) or getattr(response, "usage", None)
+    if usage is None:
+        return {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
+
+    def _read(value: Any, *names: str) -> int:
+        if isinstance(value, dict):
+            for name in names:
+                if name in value and value[name] is not None:
+                    return int(value[name])
+            return 0
+        for name in names:
+            attr = getattr(value, name, None)
+            if attr is not None:
+                return int(attr)
+        return 0
+
+    prompt_tokens = _read(usage, "prompt_token_count", "input_tokens", "prompt_tokens")
+    completion_tokens = _read(usage, "candidates_token_count", "output_tokens", "completion_tokens")
+    total_tokens = _read(usage, "total_token_count", "total_tokens")
+    if total_tokens == 0:
+        total_tokens = prompt_tokens + completion_tokens
+
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+    }

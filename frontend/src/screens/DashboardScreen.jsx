@@ -10,6 +10,28 @@ function scoreColor(score, maxMarks) {
   return 'var(--incorrect)'
 }
 
+function formatGradeBand(band) {
+  if (!band) return 'Ungraded'
+  if (typeof band !== 'string') return 'Mixed'
+  if (band === 'formula_half_credit') return 'Formula correct, arithmetic wrong'
+  if (band === 'excellent') return 'Excellent'
+  if (band === 'good') return 'Good'
+  if (band === 'average') return 'Average'
+  if (band === 'poor') return 'Needs Improvement'
+  return band
+    .split('_')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
+function formatStudentStatus(row) {
+  if (!row?.attempted) return 'Not attempted / not extracted'
+  if (row.edge_case === 'formula_correct_calculation_wrong') {
+    return 'Formula correct, arithmetic wrong'
+  }
+  return formatGradeBand(row.grade_band)
+}
+
 export default function DashboardScreen() {
   const { examId } = useParams()
   const navigate = useNavigate()
@@ -45,6 +67,11 @@ export default function DashboardScreen() {
         }
       } catch (pollError) {
         console.error(pollError)
+        if (pollError.response?.status === 404) {
+          clearInterval(intervalId)
+          navigate('/', { replace: true })
+          return
+        }
         setStatus('error')
         setError('Failed to load exam status')
       }
@@ -145,11 +172,16 @@ export default function DashboardScreen() {
         </div>
 
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span className="badge badge-neutral">{status === 'ready' ? 'Ready' : status === 'processing_students' ? 'Processing Students' : 'Reference Ready'}</span>
+          <span className="badge badge-neutral">{status === 'ready' ? 'Ready' : status === 'generating_clusters' ? 'Clustering' : status === 'processing_students' ? 'Processing Students' : 'Reference Ready'}</span>
           {summary?.total_students > 0 && (
-            <button className="btn btn-secondary btn-sm" onClick={() => navigate(`/export/${examId}`)}>
-              Export Results
-            </button>
+            <>
+              <button className="btn btn-primary btn-sm" onClick={() => navigate(`/clusters/${examId}`)}>
+                ✨ Analyze Clusters
+              </button>
+              <button className="btn btn-secondary btn-sm" onClick={() => navigate(`/export/${examId}`)}>
+                Export Results
+              </button>
+            </>
           )}
         </div>
       </header>
@@ -325,7 +357,7 @@ export default function DashboardScreen() {
                   <div style={{ padding: '18px 20px', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div>
                       <h3>Student Results For {questionData.q_number}</h3>
-                      <p style={{ fontSize: '0.84rem' }}>Scores are computed from cosine similarity against the matching reference answer.</p>
+                      <p style={{ fontSize: '0.84rem' }}>Scores combine semantic similarity, rubric concept coverage, and grading edge-case checks.</p>
                     </div>
                     <span className="badge badge-neutral">{questionData.students.length} rows</span>
                   </div>
@@ -358,7 +390,7 @@ export default function DashboardScreen() {
                               {row.score}/{row.max_marks}
                             </td>
                             <td style={{ padding: '12px 16px', color: 'var(--text-secondary)' }}>
-                              {row.attempted ? 'Matched by Q ID' : 'Not attempted / not extracted'}
+                              {formatStudentStatus(row)}
                             </td>
                           </tr>
                         ))}
@@ -394,8 +426,15 @@ export default function DashboardScreen() {
                           <div style={{ fontWeight: 800, fontSize: '1.25rem' }}>{(selectedStudent.similarity * 100).toFixed(0)}%</div>
                         </div>
                         <div className="card" style={{ padding: 16, background: 'var(--bg-surface)' }}>
-                          <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: 4 }}>Question linking</div>
-                          <div style={{ fontWeight: 700 }}>{selectedStudent.attempted ? 'Matched by question ID' : 'No extracted answer'}</div>
+                          <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: 4 }}>Rubric coverage</div>
+                          <div style={{ fontWeight: 800, fontSize: '1.25rem' }}>{((selectedStudent.concept_coverage || 0) * 100).toFixed(0)}%</div>
+                        </div>
+                      </div>
+
+                      <div className="card" style={{ padding: 16, background: 'var(--bg-surface)', marginBottom: 14 }}>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: 4 }}>Grading status</div>
+                        <div style={{ fontWeight: 700, color: scoreColor(selectedStudent.score, selectedStudent.max_marks) }}>
+                          {formatStudentStatus(selectedStudent)}
                         </div>
                       </div>
 
@@ -411,6 +450,48 @@ export default function DashboardScreen() {
                             <strong style={{ color: 'var(--accent-light)' }}>Diagram:</strong> {selectedStudent.student_diagram_description}
                           </div>
                         )}
+                      </div>
+
+                      <div className="card" style={{ padding: 18 }}>
+                        <div style={{ fontSize: '0.76rem', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 12 }}>
+                          Rubric Alignment
+                        </div>
+                        <div style={{ marginBottom: 14 }}>
+                          <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: 8 }}>Matched concepts</div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                            {(selectedStudent.matched_concepts?.length ? selectedStudent.matched_concepts : ['No strong rubric match']).slice(0, 5).map((concept, index) => (
+                              <span
+                                key={`matched-${index}`}
+                                className="badge"
+                                style={{ background: 'rgba(34,197,94,0.12)', color: 'var(--correct)', border: '1px solid rgba(34,197,94,0.25)' }}
+                              >
+                                {concept}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                        <div style={{ marginBottom: 14 }}>
+                          <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: 8 }}>Missed concepts</div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                            {(selectedStudent.missed_concepts?.length ? selectedStudent.missed_concepts : ['No major rubric gap']).slice(0, 5).map((concept, index) => (
+                              <span
+                                key={`missed-${index}`}
+                                className="badge"
+                                style={{ background: 'rgba(239,68,68,0.1)', color: 'var(--incorrect)', border: '1px solid rgba(239,68,68,0.2)' }}
+                              >
+                                {concept}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: 8 }}>Matched keywords</div>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                            {(selectedStudent.matched_keywords?.length ? selectedStudent.matched_keywords : ['No reference keywords found']).slice(0, 6).map((keyword, index) => (
+                              <span key={`keyword-${index}`} className="badge badge-neutral">{keyword}</span>
+                            ))}
+                          </div>
+                        </div>
                       </div>
                     </>
                   ) : (
