@@ -29,4 +29,7 @@ export const getExamMetrics = (examId) => api.get(`/exam/${examId}/metrics`)
 
 export const exportCSVUrl = (examId) => `/api/exam/${examId}/export`
 
+export const gradedPdfUrl = (examId, rollNumber) =>
+  `/api/exam/${examId}/student/${encodeURIComponent(rollNumber)}/graded-pdf`
+
 export default api

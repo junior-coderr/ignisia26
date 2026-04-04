@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { useNavigate, useParams } from 'react-router-dom'
-import { getQuestionDetail, getStatus, getSummary, uploadStudentPDFs } from '../api'
+import { getQuestionDetail, getStatus, getSummary, gradedPdfUrl, uploadStudentPDFs } from '../api'
 
 function scoreColor(score, maxMarks) {
   const ratio = maxMarks > 0 ? score / maxMarks : 0
@@ -417,6 +417,12 @@ export default function DashboardScreen() {
                           <div style={{ fontSize: '1.2rem', fontWeight: 800, color: scoreColor(selectedStudent.score, selectedStudent.max_marks) }}>
                             {selectedStudent.score}/{selectedStudent.max_marks}
                           </div>
+                          <button
+                            onClick={() => window.open(gradedPdfUrl(examId, selectedStudent.roll_number), '_blank')}
+                            style={{ marginTop: 6, padding: '4px 10px', fontSize: '0.72rem', fontWeight: 600, border: '1px solid var(--border)', borderRadius: 8, background: 'var(--bg-card)', color: 'var(--text)', cursor: 'pointer' }}
+                          >
+                            ⬇ Graded Sheet
+                          </button>
                         </div>
                       </div>
 

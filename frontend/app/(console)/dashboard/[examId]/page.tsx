@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
+  Download,
   FileOutput,
   Orbit,
   RefreshCcw,
@@ -16,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ApiError, getQuestionDetail, getStatus, getSummary, uploadStudentPDFs } from "@/lib/api";
+import { ApiError, getQuestionDetail, getStatus, getSummary, gradedPdfUrl, uploadStudentPDFs } from "@/lib/api";
 import type { QuestionDetailResponse, StudentScore, SummaryResponse } from "@/lib/types";
 import { formatGradeBand, highlightByTerms, initials, scoreTone } from "@/lib/utils";
 
@@ -351,9 +352,19 @@ export default function DashboardExamPage({ params }: { params: { examId: string
                   </CardDescription>
                 </div>
                 {selectedStudent ? (
-                  <Badge variant={statusVariant(selectedStudent)}>
-                    {formatGradeBand(selectedStudent.grade_band)}
-                  </Badge>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={statusVariant(selectedStudent)}>
+                      {formatGradeBand(selectedStudent.grade_band)}
+                    </Badge>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => window.open(gradedPdfUrl(examId, selectedStudent.roll_number || ""), "_blank")}
+                    >
+                      <Download className="h-4 w-4" />
+                      Graded Sheet
+                    </Button>
+                  </div>
                 ) : null}
               </div>
             </CardHeader>

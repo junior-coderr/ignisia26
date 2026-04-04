@@ -25,6 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from pdf_processor import process_reference_pdf, process_student_pdf
+from pdf_annotator import annotate_student_pdf, build_annotation_request
 from clustering_engine import run_clustering_for_question
 from grading_llm import build_question_rubric, review_answer_with_llm, should_run_llm_review
 from similarity_engine import (
@@ -759,6 +760,39 @@ def get_clusters(exam_id: str):
         "status": exam.get("status"),
         "clusters": exam.get("clusters", {})
     }
+
+
+@app.get("/api/exam/{exam_id}/student/{roll_number}/graded-pdf")
+async def download_graded_pdf(exam_id: str, roll_number: str):
+    """Generate and download an annotated/graded PDF for a specific student."""
+    exam = _get_exam(exam_id)
+    if exam.get("status") not in {"ready", "generating_clusters"}:
+        raise HTTPException(400, "Grading is not complete yet")
+
+    # Find the student
+    student = None
+    for s in exam.get("students", []):
+        if s.get("roll_number") == roll_number:
+            student = s
+            break
+    if not student:
+        raise HTTPException(404, f"Student {roll_number} not found")
+
+    # Resolve the source PDF path
+    source_pdf = student.get("source_pdf", "")
+    exam_dir = UPLOAD_DIR / exam_id / "students"
+    source_path = str(exam_dir / source_pdf) if source_pdf else ""
+
+    # Build annotation request and generate the annotated PDF
+    request = build_annotation_request(exam, student, source_path)
+    pdf_bytes = await asyncio.to_thread(annotate_student_pdf, request)
+
+    safe_name = f"graded_{roll_number}_{exam_id}.pdf"
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename={safe_name}"},
+    )
 
 
 @app.get("/api/exam/{exam_id}/export")
