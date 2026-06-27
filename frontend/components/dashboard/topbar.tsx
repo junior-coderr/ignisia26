@@ -43,11 +43,11 @@ export function Topbar() {
   const { title, subtitle } = headerCopy(pathname);
 
   return (
-    <header className="sticky top-0 z-30 border-b border-border/50 bg-background/85 backdrop-blur-2xl">
+    <header className="sticky top-0 z-30 border-b border-[#e0e0e0] bg-[#f5f5f7]/80 backdrop-blur-xl">
       <div className="flex h-16 items-center gap-4 px-5">
         <div className="min-w-0">
-          <div className="text-[15px] font-semibold tracking-tight">{title}</div>
-          <div className="text-xs text-muted-foreground">{subtitle}</div>
+          <div className="text-[17px] font-semibold tracking-[-0.01em] text-[#1d1d1f]">{title}</div>
+          <div className="text-[12px] font-normal text-[#7a7a7a]">{subtitle}</div>
         </div>
 
         <div className="ml-auto flex items-center gap-2">

@@ -10,67 +10,53 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        border: "hsl(var(--border))",
-        input: "hsl(var(--input))",
-        ring: "hsl(var(--ring))",
-        background: "hsl(var(--background))",
-        foreground: "hsl(var(--foreground))",
-        card: "hsl(var(--card))",
-        "card-foreground": "hsl(var(--card-foreground))",
+        border: "#e0e0e0",
+        input: "#f0f0f0",
+        ring: "#0071e3",
+        background: "#f5f5f7",
+        foreground: "#1d1d1f",
+        card: "#ffffff",
+        "card-foreground": "#1d1d1f",
         primary: {
-          DEFAULT: "hsl(var(--primary))",
-          foreground: "hsl(var(--primary-foreground))",
+          DEFAULT: "#0066cc",
+          foreground: "#ffffff",
         },
         muted: {
-          DEFAULT: "hsl(var(--muted))",
-          foreground: "hsl(var(--muted-foreground))",
+          DEFAULT: "#fafafc",
+          foreground: "#7a7a7a",
         },
         accent: {
-          DEFAULT: "hsl(var(--accent))",
-          foreground: "hsl(var(--accent-foreground))",
+          DEFAULT: "#0071e3",
+          foreground: "#ffffff",
         },
-        success: "hsl(var(--success))",
-        warning: "hsl(var(--warning))",
-        danger: "hsl(var(--danger))",
+        success: "#00b259",
+        warning: "#f5a623",
+        danger: "#ff3b30",
+        ink: {
+          DEFAULT: "#1d1d1f",
+          muted: "#7a7a7a",
+        },
+        canvas: {
+          DEFAULT: "#ffffff",
+          parchment: "#f5f5f7",
+        }
       },
       borderRadius: {
         xl: "1rem",
         "2xl": "1.25rem",
         "3xl": "1.5rem",
       },
-      boxShadow: {
-        panel: "0 24px 80px -32px rgba(15, 23, 42, 0.35)",
-        glow: "0 0 0 1px rgba(37, 99, 235, 0.28), 0 18px 40px -20px rgba(37, 99, 235, 0.5)",
-      },
-      backgroundImage: {
-        "hero-grid":
-          "linear-gradient(to right, rgba(37,99,235,0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(37,99,235,0.08) 1px, transparent 1px)",
-        "soft-radial":
-          "radial-gradient(circle at top, rgba(96,165,250,0.24), transparent 46%), radial-gradient(circle at 80% 20%, rgba(34,211,238,0.18), transparent 30%)",
+      letterSpacing: {
+        "apple-tight": "-0.01em",
+        "apple-loose": "0.01em",
       },
       keyframes: {
-        shimmer: {
-          "0%": { transform: "translateX(-100%)" },
-          "100%": { transform: "translateX(100%)" },
-        },
-        float: {
-          "0%, 100%": { transform: "translateY(0px)" },
-          "50%": { transform: "translateY(-8px)" },
-        },
-        indeterminate: {
-          "0%": { transform: "translateX(-100%)" },
-          "50%": { transform: "translateX(200%)" },
-          "100%": { transform: "translateX(-100%)" },
-        },
         fadeIn: {
           "0%": { opacity: "0", transform: "translateY(8px)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
         },
       },
       animation: {
-        shimmer: "shimmer 2.6s linear infinite",
-        float: "float 5s ease-in-out infinite",
-        indeterminate: "indeterminate 1.5s ease-in-out infinite",
         "fade-in": "fadeIn 0.3s ease-out",
       },
     },

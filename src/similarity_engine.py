@@ -132,13 +132,13 @@ def normalize_question_id(raw: str | None) -> str | None:
     if not value:
         return None
 
-    match = re.search(r"(?:Q|QUESTION)\s*([0-9]+[A-Z]?)", value)
+    match = re.search(r"(?:Q|QUESTION)\s*([0-9]+)([A-Z]?)", value)
     if match:
-        return f"Q{match.group(1)}"
+        return f"Q{match.group(1).lstrip('0') or '0'}{match.group(2)}"
 
-    match = re.search(r"\b([0-9]+[A-Z]?)\b", value)
+    match = re.search(r"\b([0-9]+)([A-Z]?)\b", value)
     if match:
-        return f"Q{match.group(1)}"
+        return f"Q{match.group(1).lstrip('0') or '0'}{match.group(2)}"
 
     compact = re.sub(r"[^A-Z0-9]+", "", value)
     return compact or None

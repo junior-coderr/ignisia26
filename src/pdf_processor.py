@@ -2,9 +2,21 @@
 PDF extraction for reference answer keys and student submissions.
 """
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
 import json
 import os
+from pathlib import Path
 import re
+
+CACHE_DIR = Path("uploads/cache")
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+def _get_file_hash(path: str) -> str:
+    hasher = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(8192):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 import fitz  # PyMuPDF
 from dotenv import load_dotenv
@@ -55,6 +67,7 @@ Return ONLY valid JSON:
 
 Rules:
 - Extract one object per attempted question.
+- CRITICAL: Do NOT merge answers for different questions together. Look very carefully for question number headings (e.g., "1.)", "2.", "Q1") and start a NEW object for every new question number.
 - Merge continuation text for the same question into one answer.
 - Keep the question numbering exactly as written on the sheet.
 - Never invent a question number. If the number is unreadable, omit that answer instead of guessing.
@@ -457,7 +470,7 @@ def extract_reference_answers(pdf_doc) -> dict:
 def is_image_file(path: str) -> bool:
     return str(path).lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.heic'))
 
-def process_student_pdf(pdf_path: str) -> dict:
+def _process_student_pdf_impl(pdf_path: str) -> dict:
     if is_image_file(pdf_path):
         with open(pdf_path, 'rb') as f:
             img_data = f.read()
@@ -528,7 +541,7 @@ def process_student_pdf(pdf_path: str) -> dict:
     return {"student_metadata": metadata, "answers": answers}
 
 
-def process_reference_pdf(pdf_path: str) -> dict:
+def _process_reference_pdf_impl(pdf_path: str) -> dict:
     if is_image_file(pdf_path):
         with open(pdf_path, 'rb') as f:
             img_data = f.read()
@@ -567,3 +580,42 @@ def process_reference_pdf(pdf_path: str) -> dict:
         return extract_reference_answers(doc)
     finally:
         doc.close()
+
+def process_student_pdf(pdf_path: str) -> dict:
+    file_hash = _get_file_hash(pdf_path)
+    cache_path = CACHE_DIR / f"{file_hash}_student.json"
+    if cache_path.exists():
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Failed to load student cache: {e}")
+            
+    result = _process_student_pdf_impl(pdf_path)
+    if result and not result.get("error") and result.get("answers"):
+        try:
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(result, f)
+        except Exception as e:
+            print(f"Failed to write student cache: {e}")
+    return result
+
+
+def process_reference_pdf(pdf_path: str) -> dict:
+    file_hash = _get_file_hash(pdf_path)
+    cache_path = CACHE_DIR / f"{file_hash}_reference.json"
+    if cache_path.exists():
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Failed to load reference cache: {e}")
+            
+    result = _process_reference_pdf_impl(pdf_path)
+    if result and not result.get("error") and result.get("questions"):
+        try:
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(result, f)
+        except Exception as e:
+            print(f"Failed to write reference cache: {e}")
+    return result

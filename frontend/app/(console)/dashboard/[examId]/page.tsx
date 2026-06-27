@@ -196,8 +196,8 @@ export default function DashboardExamPage({ params }: { params: { examId: string
               </Badge>
             </div>
             <div>
-              <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-              <p className="mt-1 text-sm text-muted-foreground">
+              <h1 className="text-[34px] font-semibold tracking-[-0.01em] leading-tight">Dashboard</h1>
+              <p className="mt-2 text-[17px] leading-[1.47] text-[#7a7a7a]">
                 Upload student PDFs, switch questions, and review answers.
               </p>
             </div>
@@ -284,21 +284,21 @@ export default function DashboardExamPage({ params }: { params: { examId: string
           <CardContent className="space-y-3">
             {!questionData ? (
               Array.from({ length: 6 }).map((_, index) => (
-                <Skeleton key={index} className="h-20 rounded-2xl" />
+                <Skeleton key={index} className="h-20 rounded-[18px]" />
               ))
             ) : (
               questionData.students.map((student) => (
                 <button
                   key={student.roll_number}
                   onClick={() => setSelectedStudentId(student.roll_number || null)}
-                  className={`w-full rounded-2xl border p-4 text-left transition-all duration-200 ${
+                  className={`w-full rounded-[18px] border p-4 text-left transition-all duration-200 ${
                     selectedStudent?.roll_number === student.roll_number
-                      ? "border-primary/30 bg-primary/8 shadow-sm"
-                      : "border-border/50 bg-background/60 hover:border-primary/20 hover:bg-background/80"
+                      ? "border-[#0071e3] bg-white shadow-[0_0_0_1px_rgba(0,113,227,1)]"
+                      : "border-[#e0e0e0] bg-[#fafafc] hover:bg-white hover:border-[#0066cc]/40"
                   }`}
                 >
                   <div className="flex items-start gap-3">
-                    <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 font-semibold text-primary">
+                    <div className="flex h-11 w-11 items-center justify-center rounded-[11px] bg-[#f5f5f7] font-semibold text-[#1d1d1f]">
                       {initials(student.name || student.roll_number || "ST")}
                     </div>
                     <div className="min-w-0 flex-1">
@@ -340,9 +340,9 @@ export default function DashboardExamPage({ params }: { params: { examId: string
                 <span>Average alignment {Math.round((questionSummary?.avg_similarity || 0) * 100)}%</span>
               </div>
 
-              <div className="rounded-2xl border border-border/50 bg-background/60 p-5">
-                <div className="metric-label mb-3">Reference answer</div>
-                <div className="whitespace-pre-wrap text-[15px] leading-8 text-foreground/95">
+              <div className="rounded-[18px] border border-[#e0e0e0] bg-[#fafafc] p-5">
+                <div className="mb-3 text-[12px] font-semibold uppercase tracking-[-0.12px] text-[#7a7a7a]">Reference answer</div>
+                <div className="whitespace-pre-wrap text-[17px] leading-[1.47] text-[#1d1d1f]">
                   {questionData?.reference_answer.text || "Teacher answer is loading..."}
                 </div>
               </div>
@@ -390,8 +390,8 @@ export default function DashboardExamPage({ params }: { params: { examId: string
                 </div>
               ) : (
                 <>
-                  <div className="rounded-2xl border border-border/50 bg-background/60 p-5">
-                    <div className="metric-label mb-2">Marks</div>
+                  <div className="rounded-[18px] border border-[#e0e0e0] bg-[#fafafc] p-5">
+                    <div className="mb-2 text-[12px] font-semibold uppercase tracking-[-0.12px] text-[#7a7a7a]">Marks</div>
                     <div className="flex items-end justify-between gap-3">
                       <div className={`text-4xl font-semibold ${scoreTone(selectedStudent.score_ratio)}`}>
                         {selectedStudent.score.toFixed(1)}/{selectedStudent.max_marks}
@@ -409,9 +409,9 @@ export default function DashboardExamPage({ params }: { params: { examId: string
                     <span>Confidence {Math.round(selectedStudent.grading_confidence * 100)}%</span>
                   </div>
 
-                  <div className="rounded-2xl border border-border/50 bg-background/60 p-5">
-                    <div className="mb-3 font-semibold">Student answer</div>
-                    <div className="text-[15px] leading-8 text-foreground/90">
+                  <div className="rounded-[18px] border border-[#e0e0e0] bg-[#fafafc] p-5">
+                    <div className="mb-3 font-semibold text-[#1d1d1f]">Student answer</div>
+                    <div className="text-[17px] leading-[1.47] text-[#1d1d1f]">
                       {highlightedAnswer.length ? (
                         highlightedAnswer.map((chunk, index) => (
                           <span
@@ -431,8 +431,8 @@ export default function DashboardExamPage({ params }: { params: { examId: string
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-border/50 bg-background/60 p-5">
-                    <div className="mb-3 font-semibold">Rubric points</div>
+                  <div className="rounded-[18px] border border-[#e0e0e0] bg-[#fafafc] p-5">
+                    <div className="mb-3 font-semibold text-[#1d1d1f]">Rubric points</div>
                     <div className="flex flex-wrap gap-2">
                       {(selectedStudent.matched_concepts || []).map((concept) => (
                         <Badge key={concept} variant="success">
@@ -448,7 +448,7 @@ export default function DashboardExamPage({ params }: { params: { examId: string
                   </div>
 
                   {(selectedStudent.reject_hits?.length || selectedStudent.contradiction_count) ? (
-                    <div className="rounded-2xl border border-rose-500/25 bg-rose-500/8 p-5">
+                    <div className="rounded-[18px] border border-rose-500/25 bg-rose-500/10 p-5">
                       <div className="mb-3 font-semibold text-rose-500">Issues found</div>
                       <div className="flex flex-wrap gap-2">
                         {selectedStudent.reject_hits?.map((hit) => (
@@ -465,9 +465,9 @@ export default function DashboardExamPage({ params }: { params: { examId: string
                     </div>
                   ) : null}
 
-                  <div className="rounded-2xl border border-border/50 bg-background/60 p-5">
-                    <div className="mb-2 font-semibold">Summary</div>
-                    <p className="text-sm leading-7 text-muted-foreground">
+                  <div className="rounded-[18px] border border-[#e0e0e0] bg-[#fafafc] p-5">
+                    <div className="mb-2 font-semibold text-[#1d1d1f]">Summary</div>
+                    <p className="text-[17px] leading-[1.47] text-[#7a7a7a]">
                       {selectedStudent.feedback_summary || "No explanation available yet."}
                     </p>
                   </div>

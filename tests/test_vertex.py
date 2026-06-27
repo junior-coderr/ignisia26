@@ -1,5 +1,8 @@
 import os
+from dotenv import load_dotenv
 from google import genai
+
+load_dotenv()
 
 def test_vertex():
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")

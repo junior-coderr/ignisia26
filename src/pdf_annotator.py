@@ -2,20 +2,15 @@
 PDF / Image Annotation Engine for graded student answer sheets.
 
 Produces teacher-style graded papers with:
-  - Large ✓ / ✗ marks drawn on the page
-  - Circled scores beside each answer region
-  - Color-coded highlight strips with feedback
-  - Concept match/miss pills
-  - A professional summary page
-  - Support for both PDF and image (JPG/PNG) inputs
+  - Clean, minimal grading stamps on the original pages
+  - Cross-document PDF links between stamps and a detailed summary
+  - A professional, large-font summary section appended to the document
 """
 from __future__ import annotations
 
 import io
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
 
 import fitz  # PyMuPDF
 
@@ -23,7 +18,6 @@ import fitz  # PyMuPDF
 # ── Color Palette ─────────────────────────────────────────────────────────────
 
 class C:
-    """Grading color constants (RGB 0-1)."""
     GREEN       = (0.133, 0.773, 0.369)
     GREEN_LIGHT = (0.85, 0.96, 0.88)
     AMBER       = (0.961, 0.620, 0.043)
@@ -103,10 +97,6 @@ def _is_image(path: str) -> bool:
 # ── Loader: open PDF or image as fitz.Document ────────────────────────────────
 
 def _load_document(path: str) -> fitz.Document:
-    """
-    Open a PDF or image file as a fitz.Document.
-    Images are embedded as full-page PDF content at a readable size.
-    """
     p = Path(path)
     if not p.exists():
         doc = fitz.open()
@@ -121,18 +111,17 @@ def _load_document(path: str) -> fitz.Document:
         page0 = img[0]
         img_rect = page0.rect
 
-        # Scale image to fill an A4-width page (595pt) while keeping aspect ratio
-        # Add extra vertical space below the image for annotations
         target_w = 595
         scale = target_w / img_rect.width if img_rect.width > 0 else 1.0
         page_w = target_w
         img_h = img_rect.height * scale
-        # Add 40% extra height below image for annotation overlays
-        annotation_space = max(300, img_h * 0.4)
+        
+        # Add 100px for annotation space at the top of the image
+        annotation_space = 100
         page_h = img_h + annotation_space
 
         page = img_doc.new_page(width=page_w, height=page_h)
-        page.insert_image(fitz.Rect(0, 0, page_w, img_h), stream=img_bytes)
+        page.insert_image(fitz.Rect(0, annotation_space, page_w, page_h), stream=img_bytes)
         img.close()
         return img_doc
     else:
@@ -142,7 +131,6 @@ def _load_document(path: str) -> fitz.Document:
 # ── Drawing primitives ────────────────────────────────────────────────────────
 
 def _draw_tick(page: fitz.Page, cx: float, cy: float, size: float, color: tuple):
-    """Draw a large ✓ checkmark."""
     shape = page.new_shape()
     shape.draw_line(
         fitz.Point(cx - size * 0.4, cy),
@@ -152,319 +140,231 @@ def _draw_tick(page: fitz.Page, cx: float, cy: float, size: float, color: tuple)
         fitz.Point(cx - size * 0.1, cy + size * 0.35),
         fitz.Point(cx + size * 0.45, cy - size * 0.35),
     )
-    shape.finish(color=color, width=max(3.0, size * 0.14), closePath=False,
+    shape.finish(color=color, width=max(2.0, size * 0.14), closePath=False,
                  lineCap=1, lineJoin=1)
     shape.commit()
 
 
 def _draw_cross(page: fitz.Page, cx: float, cy: float, size: float, color: tuple):
-    """Draw a large ✗ cross mark."""
     half = size * 0.3
     shape = page.new_shape()
     shape.draw_line(fitz.Point(cx - half, cy - half), fitz.Point(cx + half, cy + half))
     shape.draw_line(fitz.Point(cx + half, cy - half), fitz.Point(cx - half, cy + half))
-    shape.finish(color=color, width=max(3.0, size * 0.14), closePath=False,
+    shape.finish(color=color, width=max(2.0, size * 0.14), closePath=False,
                  lineCap=1, lineJoin=1)
     shape.commit()
 
 
-def _draw_circled_score(page: fitz.Page, cx: float, cy: float, radius: float,
-                        score: float, max_marks: float, color: tuple):
-    """Draw a score inside a stroked circle (teacher-style)."""
-    shape = page.new_shape()
-    shape.draw_circle(fitz.Point(cx, cy), radius)
-    shape.finish(color=color, fill=C.WHITE, width=2.5)
-    shape.commit()
+# ── Page annotator (Stamps) ───────────────────────────────────────────────────
 
-    score_text = f"{score:g}/{max_marks:g}"
-    fs = min(18, radius * 0.75)
-    tw = fitz.get_text_length(score_text, fontname="helv", fontsize=fs)
-    writer = fitz.TextWriter(page.rect)
-    writer.append(fitz.Point(cx - tw / 2, cy + fs * 0.35), score_text,
-                  fontsize=fs, font=fitz.Font("helv"))
-    writer.write_text(page, color=color)
-
-
-def _draw_feedback_strip(page: fitz.Page, x: float, y: float, width: float,
-                         text: str, color: tuple, bg: tuple) -> float:
-    """Draw a colored feedback strip with wrapped text. Returns Y after strip."""
-    if not text:
-        return y
-
-    fs = 12
-    padding = 10
-    line_h = fs + 5
-
-    # Word-wrap
-    words = text.split()
-    lines: list[str] = []
-    current = ""
-    inner_w = width - padding * 2 - 8
-    for word in words:
-        test = f"{current} {word}".strip()
-        if fitz.get_text_length(test, fontname="helv", fontsize=fs) > inner_w and current:
-            lines.append(current)
-            current = word
-        else:
-            current = test
-    if current:
-        lines.append(current)
-
-    strip_h = padding * 2 + len(lines) * line_h + 2
-
+def _draw_stamp(page: fitz.Page, x: float, y: float, q: QuestionAnnotation) -> tuple[float, fitz.Rect]:
+    """Draws a minimal grading stamp and returns (next_y, clickable_rect)."""
+    color = _band_color(q.grade_band)
+    bg = _band_bg(q.grade_band)
+    
+    w = 170
+    h = 55
+    
+    rect = fitz.Rect(x, y, x + w, y + h)
+    
     # Background
     shape = page.new_shape()
-    rect = fitz.Rect(x, y, x + width, y + strip_h)
     shape.draw_rect(rect)
-    shape.finish(color=color, fill=bg, width=1.0)
+    shape.finish(color=color, fill=bg, width=1.5)
+    
+    # Left bar
+    shape.draw_rect(fitz.Rect(x, y, x + 8, y + h))
+    shape.finish(color=color, fill=color, width=0)
     shape.commit()
-
-    # Left accent bar
-    accent = page.new_shape()
-    accent.draw_rect(fitz.Rect(x, y, x + 4, y + strip_h))
-    accent.finish(color=color, fill=color, width=0)
-    accent.commit()
-
+    
     # Text
     writer = fitz.TextWriter(page.rect)
-    text_y = y + padding + fs
-    for line in lines:
-        writer.append(fitz.Point(x + padding + 6, text_y), line,
-                      fontsize=fs, font=fitz.Font("helv"))
-        text_y += line_h
-    writer.write_text(page, color=C.DARK_GRAY)
+    writer.append(fitz.Point(x + 16, y + 20), f"{q.q_number} — {_band_label(q.grade_band)}", fontsize=12, font=fitz.Font("hebo"))
+    writer.append(fitz.Point(x + 16, y + 42), f"{q.score:g} / {q.max_marks:g} Marks", fontsize=12, font=fitz.Font("helv"))
+    writer.append(fitz.Point(x + w + 10, y + 34), "➔ Click for reason", fontsize=12, font=fitz.Font("helv"))
+    writer.write_text(page, color=C.BLACK)
+    
+    # Icon
+    is_correct = q.grade_band in ("correct", "excellent")
+    is_partial = q.grade_band in ("partial", "formula_half_credit", "good", "average")
+    cx, cy = x + w - 24, y + 27
+    if is_correct:
+        _draw_tick(page, cx, cy, 18, C.GREEN)
+    elif is_partial:
+        _draw_tick(page, cx, cy, 14, C.AMBER)
+    else:
+        _draw_cross(page, cx, cy, 18, C.RED)
+        
+    # The clickable rect will include the "Click for reason" text
+    clickable_rect = fitz.Rect(x, y, x + w + 120, y + h)
+    return y + h + 15, clickable_rect
 
-    return y + strip_h + 6
-
-
-def _draw_concept_row(page: fitz.Page, x: float, y: float, max_width: float,
-                      concepts: list[str], color: tuple, symbol: str) -> float:
-    """Draw a row of concept pills. Returns Y after the row."""
-    if not concepts:
-        return y
-
-    fs = 10
-    pill_h = 20
-    gap = 6
-    cx = x
-    row_y = y
-
-    for concept in concepts[:6]:
-        label = f" {symbol} {concept} "
-        tw = fitz.get_text_length(label, fontname="helv", fontsize=fs)
-        pill_w = tw + 12
-
-        if cx + pill_w > x + max_width and cx > x:
-            cx = x
-            row_y += pill_h + 4
-
-        # Pill background
-        pr = fitz.Rect(cx, row_y, cx + pill_w, row_y + pill_h)
-        shape = page.new_shape()
-        shape.draw_rect(pr)
-        shape.finish(color=color, fill=(*color[:3], 0.12) if len(color) == 3 else color,
-                     width=0.8)
-        shape.commit()
-
-        # Pill text
-        writer = fitz.TextWriter(page.rect)
-        writer.append(fitz.Point(cx + 6, row_y + pill_h - 5), label,
-                      fontsize=fs, font=fitz.Font("helv"))
-        writer.write_text(page, color=color)
-
-        cx += pill_w + gap
-
-    return row_y + pill_h + 6
-
-
-def _draw_question_label(page: fitz.Page, x: float, y: float,
-                         q_number: str, band: str, color: tuple) -> float:
-    """Draw a bold question header label like 'Q1 — Correct'. Returns Y after."""
-    label = f"{q_number}  —  {_band_label(band)}"
-    fs = 14
-    writer = fitz.TextWriter(page.rect)
-    writer.append(fitz.Point(x, y + fs), label, fontsize=fs, font=fitz.Font("helv"))
-    writer.write_text(page, color=color)
-    return y + fs + 8
-
-
-# ── Page annotator ────────────────────────────────────────────────────────────
 
 def _annotate_page(page: fitz.Page, questions: list[QuestionAnnotation],
-                   annotation_y_start: float | None = None):
-    """
-    Draw teacher-style annotations on a single page.
-    If annotation_y_start is given, annotations begin at that Y position
-    (used for images where we want to annotate below the image).
-    """
-    pw = page.rect.width
-    ph = page.rect.height
-
+                   annotation_y_start: float | None = None) -> dict[str, tuple[int, fitz.Rect]]:
+    """Returns mapping of q_number -> (page_num, stamp_rect)."""
     margin_l = 20
-    margin_r = 20
-    content_w = pw - margin_l - margin_r
-    score_radius = 28
-    mark_size = 34
-
-    # Start annotations either below image or at top of page
-    y = annotation_y_start if annotation_y_start is not None else 14
-
+    y = annotation_y_start if annotation_y_start is not None else 20
+    
+    stamps = {}
     for q in questions:
-        color = _band_color(q.grade_band)
-        bg = _band_bg(q.grade_band)
-        is_correct = q.grade_band in ("correct", "excellent")
-        is_partial = q.grade_band in ("partial", "formula_half_credit", "good", "average")
-
-        block_top = y
-
-        # ── Large ✓ or ✗ mark ──
-        mark_x = margin_l + mark_size * 0.5
-        mark_y = y + mark_size * 0.5
-        if is_correct:
-            _draw_tick(page, mark_x, mark_y, mark_size, C.GREEN)
-        elif is_partial:
-            _draw_tick(page, mark_x, mark_y, mark_size * 0.85, C.AMBER)
-            wave_shape = page.new_shape()
-            wave_shape.draw_line(
-                fitz.Point(mark_x + mark_size * 0.3, mark_y + mark_size * 0.1),
-                fitz.Point(mark_x + mark_size * 0.55, mark_y - mark_size * 0.1),
-            )
-            wave_shape.finish(color=C.AMBER, width=2.0, closePath=False)
-            wave_shape.commit()
-        else:
-            _draw_cross(page, mark_x, mark_y, mark_size, C.RED)
-
-        # ── Circled score (top-right) ──
-        score_cx = pw - margin_r - score_radius - 6
-        score_cy = y + score_radius + 4
-        _draw_circled_score(page, score_cx, score_cy, score_radius,
-                            q.score, q.max_marks, color)
-
-        # ── Question label ──
-        label_x = margin_l + mark_size + 12
-        y = _draw_question_label(page, label_x, y, q.q_number, q.grade_band, color)
-
-        # ── Feedback strip ──
-        strip_x = margin_l + 6
-        strip_w = content_w - score_radius * 2 - 24
-        if q.feedback:
-            y = _draw_feedback_strip(page, strip_x, y, strip_w,
-                                     q.feedback, color, bg)
-
-        # ── Concept pills ──
-        pill_x = margin_l + 6
-        pill_w = content_w - 12
-        if q.matched_concepts:
-            y = _draw_concept_row(page, pill_x, y, pill_w,
-                                  q.matched_concepts, C.GREEN, "✓")
-        if q.missed_concepts:
-            y = _draw_concept_row(page, pill_x, y, pill_w,
-                                  q.missed_concepts, C.RED, "✗")
-
-        # ── Left color bar spanning the entire block ──
-        bar_h = max(y - block_top, mark_size + 10)
-        bar_shape = page.new_shape()
-        bar_shape.draw_rect(fitz.Rect(margin_l - 8, block_top, margin_l - 3, block_top + bar_h))
-        bar_shape.finish(color=color, fill=color, width=0)
-        bar_shape.commit()
-
-        # ── Separator line ──
-        y += 6
-        sep = page.new_shape()
-        sep.draw_line(fitz.Point(margin_l, y), fitz.Point(pw - margin_r, y))
-        sep.finish(color=C.LIGHT_GRAY, width=0.6)
-        sep.commit()
-        y += 10
+        y, rect = _draw_stamp(page, margin_l, y, q)
+        stamps[q.q_number] = (page.number, rect)
+        
+    return stamps
 
 
 # ── Summary page ──────────────────────────────────────────────────────────────
 
-def _build_summary_page(doc: fitz.Document, req: StudentAnnotationRequest):
-    """Append a professional grading summary page."""
+def _wrap_text(text: str, max_width: float, fs: float) -> list[str]:
+    words = text.split()
+    lines = []
+    current = ""
+    for w in words:
+        test = f"{current} {w}".strip()
+        if fitz.get_text_length(test, fontname="helv", fontsize=fs) > max_width and current:
+            lines.append(current)
+            current = w
+        else:
+            current = test
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _build_summary_pages(doc: fitz.Document, req: StudentAnnotationRequest, stamps: dict[str, tuple[int, fitz.Rect]]):
+    """Append summary pages and inject bi-directional links."""
     page = doc.new_page(width=595, height=842)
     pw, ph = page.rect.width, page.rect.height
     cx = pw / 2
-
+    
     # ── Dark header ──
-    _fill_rect(page, 0, 0, pw, 65, C.HEADER_BG)
-    _text_centered(page, cx, 42, "Graded Answer Sheet — Summary", 18, C.WHITE)
-
-    # ── Student info block ──
-    y = 85
+    _fill_rect(page, 0, 0, pw, 75, C.HEADER_BG)
+    _text_centered(page, cx, 48, "Graded Answer Sheet — Summary", 22, C.WHITE)
+    
+    y = 100
     info = [
         ("Student", req.student_name),
         ("Roll No", req.roll_number),
         ("Exam", req.exam_title),
     ]
     for label, value in info:
-        _text(page, 40, y, f"{label}:", 11, C.MID_GRAY)
-        _text(page, 110, y, value, 12, C.BLACK)
-        y += 22
-
-    # ── Score hero ──
-    y += 10
+        _text(page, 40, y, f"{label}:", 14, C.MID_GRAY)
+        _text(page, 120, y, value, 16, C.BLACK)
+        y += 28
+        
+    y += 20
     ratio = req.total_score / req.max_total if req.max_total > 0 else 0
     hero_color = C.GREEN if ratio >= 0.7 else C.AMBER if ratio >= 0.4 else C.RED
     hero_bg = _band_bg("correct" if ratio >= 0.7 else "partial" if ratio >= 0.4 else "incorrect")
 
-    _fill_rect(page, 35, y, pw - 70, 56, hero_bg, border_color=hero_color, border_w=1.5)
-    _text(page, 52, y + 26, "Total Score:", 13, C.DARK_GRAY)
+    _fill_rect(page, 35, y, pw - 70, 80, hero_bg, border_color=hero_color, border_w=2.0)
+    _text(page, 55, y + 45, "Total Score:", 18, C.DARK_GRAY)
     score_str = f"{req.total_score:g} / {req.max_total:g}   ({ratio * 100:.0f}%)"
-    _text(page, 155, y + 26, score_str, 16, hero_color)
-
+    _text(page, 185, y + 48, score_str, 28, hero_color)
+    
     if ratio >= 0.7:
-        _draw_tick(page, pw - 75, y + 28, 28, hero_color)
+        _draw_tick(page, pw - 80, y + 40, 40, hero_color)
     elif ratio >= 0.4:
-        _draw_tick(page, pw - 75, y + 28, 24, hero_color)
+        _draw_tick(page, pw - 80, y + 40, 32, hero_color)
     else:
-        _draw_cross(page, pw - 75, y + 28, 24, hero_color)
-
-    y += 72
-
-    # ── Table ──
-    col_x = [40, 95, 155, 215, 300, 400]
-    headers = ["Q.No", "Score", "Max", "Band", "Feedback", "Concepts"]
-
-    _fill_rect(page, 35, y - 2, pw - 70, 24, C.LIGHT_GRAY, border_color=C.MID_GRAY, border_w=0.5)
-    for i, h in enumerate(headers):
-        _text(page, col_x[i], y + 14, h, 10, C.DARK_GRAY)
-    y += 28
-
+        _draw_cross(page, pw - 80, y + 40, 32, hero_color)
+        
+    y += 120
+    
+    # ── Detailed Feedback Sections (paginated) ──
     sorted_qs = sorted(req.questions, key=lambda q: q.q_number)
-    for idx, q in enumerate(sorted_qs):
+    
+    for q in sorted_qs:
+        if y > ph - 250:
+            page = doc.new_page(width=595, height=842)
+            y = 50
+            
         color = _band_color(q.grade_band)
+        
+        # Header Block
+        _fill_rect(page, 35, y, pw - 70, 50, _band_bg(q.grade_band), border_color=color, border_w=1.5)
+        _text(page, 50, y + 32, f"{q.q_number} — {_band_label(q.grade_band)}", 18, color)
+        _text(page, pw - 140, y + 32, f"{q.score:g} / {q.max_marks:g}", 20, color)
+        
+        target_y = y  # For the inbound link
+        
+        # Link back to source page
+        if q.q_number in stamps:
+            source_page_num, stamp_rect = stamps[q.q_number]
+            
+            # Draw a button
+            btn_rect = fitz.Rect(pw - 240, y + 10, pw - 160, y + 40)
+            _fill_rect(page, btn_rect.x0, btn_rect.y0, btn_rect.width, btn_rect.height, C.WHITE, color, 1.5)
+            _text(page, btn_rect.x0 + 10, btn_rect.y0 + 20, "➔ See Paper", 11, color)
+            
+            # Create link from summary to stamp
+            page.insert_link({
+                "kind": fitz.LINK_GOTO,
+                "from": btn_rect,
+                "page": source_page_num,
+                "to": fitz.Point(stamp_rect.x0, stamp_rect.y0)
+            })
+            
+            # Create link from stamp to summary
+            source_page = doc[source_page_num]
+            source_page.insert_link({
+                "kind": fitz.LINK_GOTO,
+                "from": stamp_rect,
+                "page": page.number,
+                "to": fitz.Point(35, target_y)
+            })
 
-        if idx % 2 == 0:
-            _fill_rect(page, 35, y - 2, pw - 70, 24, (0.98, 0.98, 0.99))
-
-        dot_shape = page.new_shape()
-        dot_shape.draw_circle(fitz.Point(col_x[0] - 7, y + 9), 4)
-        dot_shape.finish(color=color, fill=color, width=0)
-        dot_shape.commit()
-
-        _text(page, col_x[0], y + 14, q.q_number, 11, C.BLACK)
-        _text(page, col_x[1], y + 14, f"{q.score:g}", 11, color)
-        _text(page, col_x[2], y + 14, f"{q.max_marks:g}", 11, C.DARK_GRAY)
-        _text(page, col_x[3], y + 14, _band_label(q.grade_band), 10, color)
-
-        fb_short = (q.feedback[:35] + "…") if len(q.feedback) > 38 else q.feedback
-        _text(page, col_x[4], y + 14, fb_short, 9, C.MID_GRAY)
-
-        matched = len(q.matched_concepts)
-        missed = len(q.missed_concepts)
-        if matched or missed:
-            concept_info = f"✓{matched}  ✗{missed}"
-            _text(page, col_x[5], y + 14, concept_info, 10,
-                  C.GREEN if missed == 0 else C.RED if matched == 0 else C.AMBER)
-
+        y += 75
+        
+        # Feedback text
+        _text(page, 35, y, "Reason / Feedback:", 16, C.DARK_GRAY)
         y += 24
-
-        if y > ph - 60:
-            break
-
-    # ── Footer ──
-    footer = "Generated by GradeSync AI — Automated Grading System"
-    _text_centered(page, cx, ph - 20, footer, 8, C.MID_GRAY)
+        feedback_lines = _wrap_text(q.feedback or "No feedback provided.", pw - 70, 14)
+        for line in feedback_lines:
+            if y > ph - 60:
+                page = doc.new_page(width=595, height=842)
+                y = 50
+            _text(page, 35, y, line, 14, C.BLACK)
+            y += 22
+            
+        y += 10
+        
+        # Concepts
+        if q.matched_concepts:
+            if y > ph - 60:
+                page = doc.new_page(width=595, height=842)
+                y = 50
+            _text(page, 35, y, "✓ Matched Points:", 14, C.GREEN)
+            y += 22
+            for c in q.matched_concepts:
+                if y > ph - 60:
+                    page = doc.new_page(width=595, height=842)
+                    y = 50
+                _text(page, 55, y, f"• {c}", 14, C.BLACK)
+                y += 20
+            y += 10
+            
+        if q.missed_concepts:
+            if y > ph - 60:
+                page = doc.new_page(width=595, height=842)
+                y = 50
+            _text(page, 35, y, "✗ Missed Points:", 14, C.RED)
+            y += 22
+            for c in q.missed_concepts:
+                if y > ph - 60:
+                    page = doc.new_page(width=595, height=842)
+                    y = 50
+                _text(page, 55, y, f"• {c}", 14, C.BLACK)
+                y += 20
+            y += 10
+            
+        y += 30
+        sep = page.new_shape()
+        sep.draw_line(fitz.Point(35, y), fitz.Point(pw - 35, y))
+        sep.finish(color=C.LIGHT_GRAY, width=1.5)
+        sep.commit()
+        y += 40
 
 
 # ── Text/rect helpers ─────────────────────────────────────────────────────────
@@ -491,14 +391,9 @@ def _fill_rect(page: fitz.Page, x: float, y: float, w: float, h: float,
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def annotate_student_pdf(request: StudentAnnotationRequest) -> bytes:
-    """
-    Open the student's original PDF or image, overlay grading annotations,
-    append a summary page, and return the result as PDF bytes.
-    """
     doc = _load_document(request.source_pdf_path)
     is_img = _is_image(request.source_pdf_path)
 
-    # Map pages → questions (source_pages are 1-indexed)
     page_questions: dict[int, list[QuestionAnnotation]] = {}
     for q in request.questions:
         pages = q.source_pages if q.source_pages else [1]
@@ -507,31 +402,21 @@ def annotate_student_pdf(request: StudentAnnotationRequest) -> bytes:
             if 0 <= idx < len(doc):
                 page_questions.setdefault(idx, []).append(q)
 
-    # Fallback: all questions on page 0
     if not page_questions and len(doc) > 0:
         page_questions[0] = list(request.questions)
 
-    # Annotate each page
+    all_stamps = {}
     for page_idx, questions in sorted(page_questions.items()):
         page = doc[page_idx]
         if is_img and page_idx == 0:
-            # For images: figure out where the image ends so
-            # annotations go below the image, not on top of it
-            img_list = page.get_images(full=True)
-            if img_list:
-                # Image fills from y=0 to roughly 60% of page height
-                # (we added 40% annotation space in _load_document)
-                annotation_start_y = page.rect.height * 0.60 + 10
-            else:
-                annotation_start_y = page.rect.height * 0.55
-            _annotate_page(page, questions, annotation_y_start=annotation_start_y)
+            annotation_start_y = 10
+            stamps = _annotate_page(page, questions, annotation_y_start=annotation_start_y)
         else:
-            _annotate_page(page, questions)
+            stamps = _annotate_page(page, questions)
+        all_stamps.update(stamps)
 
-    # Summary page
-    _build_summary_page(doc, request)
+    _build_summary_pages(doc, request, all_stamps)
 
-    # Output
     buf = io.BytesIO()
     doc.save(buf, deflate=True, garbage=4)
     doc.close()
@@ -540,21 +425,19 @@ def annotate_student_pdf(request: StudentAnnotationRequest) -> bytes:
 
 
 def annotate_student_image(request: StudentAnnotationRequest) -> bytes:
-    """
-    Same as annotate_student_pdf but returns the first annotated page
-    as a PNG image (for single-image inputs).
-    """
     doc = _load_document(request.source_pdf_path)
 
+    all_stamps = {}
     if len(doc) > 0:
         page = doc[0]
-        img_list = page.get_images(full=True)
-        if img_list:
-            annotation_start_y = page.rect.height * 0.60 + 10
-        else:
-            annotation_start_y = page.rect.height * 0.55
-        _annotate_page(doc[0], request.questions, annotation_y_start=annotation_start_y)
+        annotation_start_y = 10
+        all_stamps = _annotate_page(page, request.questions, annotation_y_start=annotation_start_y)
 
+    _build_summary_pages(doc, request, all_stamps)
+
+    # For images, we still return the first page as PNG preview in some legacy callers,
+    # but since this is now a paginated summary document, returning a PNG breaks the summary.
+    # The frontend only downloads PDFs, so this PNG function might be obsolete.
     pix = doc[0].get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
     png_bytes = pix.tobytes("png")
     doc.close()
@@ -566,7 +449,6 @@ def build_annotation_request(
     student: dict,
     source_pdf_path: str,
 ) -> StudentAnnotationRequest:
-    """Bridge the main.py data model to the annotator data model."""
     questions = []
     for q_number in exam.get("questions", []):
         score_data = student.get("scores", {}).get(q_number)

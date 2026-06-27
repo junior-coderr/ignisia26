@@ -7,22 +7,20 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-2xl text-sm font-semibold transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap text-[17px] font-normal transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 active:scale-[0.96]",
   {
     variants: {
       variant: {
-        default:
-          "bg-primary text-primary-foreground shadow-glow hover:-translate-y-0.5 hover:shadow-panel active:translate-y-0",
-        secondary:
-          "border border-border/70 bg-card/80 text-foreground backdrop-blur-xl hover:border-primary/40 hover:bg-card",
-        ghost: "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-        subtle: "bg-muted/80 text-foreground hover:bg-muted",
+        default: "bg-[#0066cc] text-white rounded-full hover:bg-[#0071e3]",
+        secondary: "bg-[#fafafc] text-[#1d1d1f] border border-[#e0e0e0] rounded-[11px] hover:bg-[#f5f5f7] text-[14px]",
+        ghost: "text-[#7a7a7a] hover:bg-[#f5f5f7] hover:text-[#1d1d1f] rounded-[8px] text-[14px]",
+        darkUtility: "bg-[#1d1d1f] text-white rounded-[8px] hover:bg-[#333333] text-[14px]",
       },
       size: {
-        default: "h-11 px-5 py-2.5",
-        sm: "h-9 rounded-xl px-3.5",
-        lg: "h-12 rounded-2xl px-6 text-base",
-        icon: "h-10 w-10 rounded-xl",
+        default: "px-[22px] py-[11px]",
+        sm: "px-[14px] py-[8px]",
+        lg: "px-[28px] py-[14px] text-[18px]",
+        icon: "h-11 w-11 rounded-full",
       },
     },
     defaultVariants: {

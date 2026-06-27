@@ -2,13 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, FileText, UploadCloud } from "lucide-react";
+import { ArrowRight, UploadCloud } from "lucide-react";
 import { toast } from "sonner";
 
 import { UploadDropzone } from "@/components/dashboard/upload-dropzone";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { uploadReferencePDF } from "@/lib/api";
 
@@ -42,20 +40,16 @@ export default function WorkspacePage() {
   }
 
   return (
-    <div className="space-y-5">
-      <Card className="overflow-hidden p-6">
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <Badge variant="info">Step 1</Badge>
-          <Badge variant="neutral">Upload teacher answer key</Badge>
-        </div>
-        <h1 className="max-w-2xl text-2xl font-semibold tracking-tight">
-          Start by uploading the teacher&apos;s correct answer sheet.
+    <div className="min-h-full bg-white flex flex-col pt-16 pb-32">
+      <div className="mx-auto w-full max-w-[980px] px-6 text-center">
+        <h1 className="text-[40px] font-semibold tracking-[-0.01em] text-[#1d1d1f] leading-[1.1]">
+          Start by uploading the teacher&apos;s answer key.
         </h1>
-        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          Once processed, you&apos;ll go to the dashboard to upload student PDFs and review automatic grading.
+        <p className="mt-4 text-[24px] font-light leading-[1.5] text-[#1d1d1f]">
+          Once processed, you&apos;ll upload student PDFs and review automatic grading.
         </p>
 
-        <div className="mt-6">
+        <div className="mt-16 mx-auto max-w-[600px]">
           <UploadDropzone
             title="Drop the teacher answer key here"
             subtitle="PDF or image with the correct questions and answers."
@@ -64,7 +58,7 @@ export default function WorkspacePage() {
           />
         </div>
 
-        <div className="mt-5 flex flex-wrap items-center gap-3">
+        <div className="mt-12 flex flex-col items-center justify-center gap-6">
           <Button size="lg" onClick={handleProcessPaper} disabled={processing || !files.length}>
             {processing ? (
               <>
@@ -73,57 +67,61 @@ export default function WorkspacePage() {
               </>
             ) : (
               <>
-                <UploadCloud className="h-4 w-4" />
                 Process reference sheet
               </>
             )}
           </Button>
-          {lastExamId ? (
-            <Button variant="secondary" size="lg" onClick={() => router.push(`/dashboard/${lastExamId}`)}>
-              Resume last session
-            </Button>
-          ) : null}
+          
           {processing && (
-            <div className="min-w-[180px] flex-1">
+            <div className="w-full max-w-[200px]">
               <Progress value={0} indeterminate />
             </div>
           )}
+
+          {lastExamId && !processing && (
+            <button 
+              onClick={() => router.push(`/dashboard/${lastExamId}`)}
+              className="text-[#0066cc] text-[17px] font-normal hover:underline flex items-center gap-1"
+            >
+              Resume last session <ArrowRight className="h-4 w-4" />
+            </button>
+          )}
         </div>
-      </Card>
-
-      <div className="grid gap-5 lg:grid-cols-2">
-        <Card className="p-5">
-          <div className="metric-label mb-3">How it works</div>
-          <div className="grid gap-2">
-            {[
-              "Upload the teacher answer key.",
-              "Wait for question extraction and embeddings.",
-              "Upload student PDFs and review marks per question.",
-            ].map((item, idx) => (
-              <div key={item} className="flex items-start gap-3 rounded-xl border border-border/40 bg-background/50 p-3 text-sm text-muted-foreground">
-                <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-primary/10 text-[10px] font-bold text-primary">
-                  {idx + 1}
+      </div>
+      
+      <div className="mt-32 w-full bg-[#fafafc] py-24">
+        <div className="mx-auto grid max-w-[980px] gap-12 px-6 lg:grid-cols-2">
+          <div>
+            <div className="mb-4 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7a7a7a]">
+              How it works
+            </div>
+            <div className="space-y-6">
+              {[
+                "Upload the teacher answer key.",
+                "Wait for question extraction and embeddings.",
+                "Upload student PDFs and review marks per question.",
+              ].map((item, idx) => (
+                <div key={item} className="flex items-start gap-4 text-[17px] text-[#1d1d1f]">
+                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#e0e0e0] text-[12px] font-semibold text-[#1d1d1f]">
+                    {idx + 1}
+                  </div>
+                  <span className="leading-[1.47]">{item}</span>
                 </div>
-                <span>{item}</span>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </Card>
 
-        <Card className="p-5">
-          <div className="metric-label mb-3">After upload</div>
-          <div className="space-y-2 text-sm leading-relaxed text-muted-foreground">
-            <p>Upload many student PDFs in one batch.</p>
-            <p>Each student answer is compared with the matching teacher answer.</p>
-            <p>View grouped answer clusters and analytics.</p>
+          <div>
+            <div className="mb-4 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#7a7a7a]">
+              After upload
+            </div>
+            <div className="space-y-4 text-[17px] leading-[1.47] text-[#1d1d1f]">
+              <p>Upload many student PDFs in one batch.</p>
+              <p>Each student answer is compared with the matching teacher answer.</p>
+              <p>View grouped answer clusters and analytics.</p>
+            </div>
           </div>
-          {lastExamId ? (
-            <Button className="mt-4" variant="secondary" size="sm" onClick={() => router.push(`/dashboard/${lastExamId}`)}>
-              Open last dashboard
-              <ArrowRight className="h-3.5 w-3.5" />
-            </Button>
-          ) : null}
-        </Card>
+        </div>
       </div>
     </div>
   );

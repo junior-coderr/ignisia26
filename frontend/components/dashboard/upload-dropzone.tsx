@@ -54,22 +54,19 @@ export function UploadDropzone({
         }}
         onClick={() => inputRef.current?.click()}
         className={cn(
-          "group relative flex w-full flex-col items-center justify-center overflow-hidden rounded-2xl border border-dashed px-8 py-10 text-center transition-all duration-300",
+          "group relative flex w-full flex-col items-center justify-center overflow-hidden rounded-[18px] border border-dashed px-8 py-10 text-center transition-all duration-300",
           isDragging
-            ? "border-primary/60 bg-primary/8 shadow-[0_0_0_2px_rgba(37,99,235,0.12)]"
+            ? "border-[#0066cc] bg-[#0066cc]/5 shadow-[0_0_0_2px_rgba(0,102,204,0.15)]"
             : files.length > 0
-              ? "border-success/40 bg-success/4"
-              : "border-border/60 bg-card/50 hover:border-primary/30 hover:bg-card/70",
+              ? "border-[#00b259]/40 bg-[#00b259]/5"
+              : "border-[#e0e0e0] bg-white hover:border-[#0066cc]/40 hover:bg-[#fafafc]",
         )}
       >
-        {/* Subtle grid background */}
-        <div className="absolute inset-0 bg-hero-grid bg-[size:20px_20px] opacity-[0.04]" />
-
         <div className={cn(
-          "relative flex h-12 w-12 items-center justify-center rounded-2xl transition-all duration-300",
+          "relative flex h-12 w-12 items-center justify-center rounded-[11px] transition-all duration-300",
           files.length > 0
-            ? "bg-success/15 text-success"
-            : "bg-primary/10 text-primary group-hover:bg-primary/15",
+            ? "bg-[#00b259]/15 text-[#00b259]"
+            : "bg-[#f5f5f7] text-[#0066cc] group-hover:bg-[#0066cc]/10",
         )}>
           {files.length > 0 ? (
             <CheckCircle2 className="h-6 w-6" />
@@ -81,12 +78,12 @@ export function UploadDropzone({
         </div>
 
         <div className="relative mt-4 space-y-1">
-          <h3 className="text-base font-medium tracking-tight">
+          <h3 className="text-[17px] font-semibold tracking-[-0.01em] text-[#1d1d1f]">
             {files.length > 0
               ? `${files.length} file${files.length > 1 ? "s" : ""} selected`
               : title}
           </h3>
-          <p className="max-w-md text-sm leading-relaxed text-muted-foreground">
+          <p className="max-w-md text-[14px] leading-[1.43] text-[#7a7a7a]">
             {files.length > 0
               ? "Click to add more or drag additional files"
               : subtitle}
@@ -119,18 +116,18 @@ export function UploadDropzone({
             transition={{ duration: 0.2, ease: "easeOut" }}
             className="overflow-hidden"
           >
-            <div className="flex items-center gap-3 rounded-xl border border-border/50 bg-card/60 px-4 py-2.5">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/8 text-primary">
+            <div className="flex items-center gap-3 rounded-[11px] border border-[#e0e0e0] bg-white px-4 py-2.5">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] bg-[#f5f5f7] text-[#0066cc]">
                 <FileText className="h-4 w-4" />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium">{file.name}</div>
-                <div className="text-xs text-muted-foreground">{formatSize(file.size)}</div>
+                <div className="truncate text-[14px] font-semibold text-[#1d1d1f]">{file.name}</div>
+                <div className="text-[12px] text-[#7a7a7a]">{formatSize(file.size)}</div>
               </div>
               <Button
                 size="icon"
                 variant="ghost"
-                className="h-8 w-8 shrink-0 rounded-lg"
+                className="h-8 w-8 shrink-0 rounded-[8px]"
                 onClick={(event) => {
                   event.stopPropagation();
                   onFilesChange(files.filter((_, fileIndex) => fileIndex !== index));

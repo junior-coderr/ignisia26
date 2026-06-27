@@ -35,7 +35,8 @@ async function proxy(request: NextRequest, pathSegments: string[]) {
   };
 
   if (!["GET", "HEAD"].includes(request.method)) {
-    init.body = await request.arrayBuffer();
+    init.body = request.body;
+    (init as any).duplex = "half";
   }
 
   try {

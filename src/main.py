@@ -1,17 +1,24 @@
 """
 FastAPI backend for reference-answer-based automatic grading.
 """
-import os
-# Redirect all HuggingFace / model downloads to D: drive (C: drive has no space)
-os.environ.setdefault("HF_HOME", r"D:\hackathon\ignisia26\.hf_cache")
-os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", r"D:\hackathon\ignisia26\.hf_cache")
-os.environ.setdefault("TRANSFORMERS_CACHE", r"D:\hackathon\ignisia26\.hf_cache")
-os.environ.setdefault("HUGGINGFACE_HUB_CACHE", r"D:\hackathon\ignisia26\.hf_cache\hub")
+import os # Triggering Uvicorn reload
+from pathlib import Path as _Path
+
+# Redirect HuggingFace model downloads to a .hf_cache folder inside the project root
+_PROJECT_ROOT = _Path(__file__).resolve().parent.parent
+_HF_CACHE = str(_PROJECT_ROOT / ".hf_cache")
+os.environ.setdefault("HF_HOME", _HF_CACHE)
+os.environ.setdefault("SENTENCE_TRANSFORMERS_HOME", _HF_CACHE)
+os.environ.setdefault("TRANSFORMERS_CACHE", _HF_CACHE)
+os.environ.setdefault("HUGGINGFACE_HUB_CACHE", str(_PROJECT_ROOT / ".hf_cache" / "hub"))
 import asyncio
 import csv
 import io
 import uuid
 import sys
+import json
+import threading
+import datetime
 from time import perf_counter
 from pathlib import Path
 from typing import Any, Callable
@@ -67,7 +74,37 @@ RUBRIC_BUILD_CONCURRENCY = _env_int("RUBRIC_BUILD_CONCURRENCY", 3)
 LLM_REVIEW_CONCURRENCY = _env_int("LLM_REVIEW_CONCURRENCY", 3)
 
 # In-memory exam store. A single exam is created from one teacher reference PDF.
-exams: dict[str, dict] = {}
+_exams_lock = threading.Lock()
+
+def _load_exams_db() -> dict[str, dict]:
+    loaded_exams = {}
+    for exam_dir in UPLOAD_DIR.glob("exam_*"):
+        if exam_dir.is_dir():
+            db_path = exam_dir / "exam_data.json"
+            if db_path.exists():
+                try:
+                    with open(db_path, "r", encoding="utf-8") as f:
+                        exam = json.load(f)
+                        loaded_exams[exam["exam_id"]] = exam
+                except Exception as e:
+                    print(f"Failed to load exam {exam_dir.name}: {e}")
+    return loaded_exams
+
+exams: dict[str, dict] = _load_exams_db()
+
+def _save_exams_db(exam_id: str = None):
+    with _exams_lock:
+        exams_to_save = [exams.get(exam_id)] if exam_id and exams.get(exam_id) else list(exams.values())
+        for exam in exams_to_save:
+            if not exam:
+                continue
+            try:
+                exam_dir = UPLOAD_DIR / exam["exam_id"]
+                exam_dir.mkdir(exist_ok=True)
+                with open(exam_dir / "exam_data.json", "w", encoding="utf-8") as f:
+                    json.dump(exam, f)
+            except Exception as e:
+                print(f"Failed to save exam {exam['exam_id']}: {e}")
 
 
 def _timed_call(func: Callable[..., Any], *args, **kwargs) -> tuple[Any, float]:
@@ -377,8 +414,8 @@ async def run_reference_pipeline(exam_id: str, reference_pdf_path: str):
             3,
         )
         for index, q_number in enumerate(ordered_questions):
-            normalized_questions[q_number]["answer_embedding"] = embeddings[index]
-            normalized_questions[q_number]["embedding"] = embeddings[index]
+            normalized_questions[q_number]["answer_embedding"] = embeddings[index].tolist() if hasattr(embeddings[index], 'tolist') else embeddings[index]
+            normalized_questions[q_number]["embedding"] = embeddings[index].tolist() if hasattr(embeddings[index], 'tolist') else embeddings[index]
 
         rubric_started_at = perf_counter()
         rubric_jobs = [
@@ -402,16 +439,20 @@ async def run_reference_pipeline(exam_id: str, reference_pdf_path: str):
             "questions": normalized_questions,
         }
         exam["questions"] = ordered_questions
-        exam["title"] = extracted.get("exam_title") or "Reference Answer Key"
+        exam["title"] = extracted.get("exam_title") or exam.get("title") or "Reference Answer Key"
         exam["exam_code"] = extracted.get("exam_code") or ""
         exam["progress"] = 1.0
         exam["status"] = "reference_ready"
     except Exception as exc:
+        import traceback
+        with open("traceback_log.txt", "w") as f:
+            f.write(traceback.format_exc())
         exam["status"] = "error"
         exam["error"] = str(exc)
         exam["progress"] = 0.0
     finally:
         exam["metrics"]["timings"]["reference_seconds"] = round(perf_counter() - started_at, 3)
+        _save_exams_db(exam_id)
 
 
 async def run_student_pipeline(exam_id: str, pdf_paths: list[str]):
@@ -582,6 +623,7 @@ async def run_student_pipeline(exam_id: str, pdf_paths: list[str]):
             exam["metrics"]["timings"].get("student_seconds", 0.0) + (perf_counter() - started_at),
             3,
         )
+        _save_exams_db(exam_id)
 
 def _run_clustering(exam: dict):
     started_at = perf_counter()
@@ -596,14 +638,44 @@ def _run_clustering(exam: dict):
             
         clusters = run_clustering_for_question(q_number, ref_data, students)
         clusters_metadata[q_number] = clusters
-        
-    exam["clusters"] = clusters_metadata
-    exam["metrics"]["timings"]["clustering_seconds"] = round(perf_counter() - started_at, 3)
+        exam["clusters"] = clusters_metadata
+        exam["metrics"]["timings"]["clustering_seconds"] = round(perf_counter() - started_at, 3)
 
 
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/exams")
+def get_all_exams():
+    summary_list = []
+    for exam_id, exam in exams.items():
+        summary_list.append({
+            "exam_id": exam_id,
+            "title": exam.get("title") or "Reference Answer Key",
+            "created_at": exam.get("created_at", ""),
+            "status": exam.get("status"),
+            "student_count": len(exam.get("students", []))
+        })
+    summary_list.sort(key=lambda x: x["created_at"], reverse=True)
+    return {"exams": summary_list}
+
+
+@app.delete("/api/exam/{exam_id}")
+def delete_exam(exam_id: str):
+    if exam_id in exams:
+        del exams[exam_id]
+        _save_exams_db()
+        
+        # Delete from disk
+        import shutil
+        exam_dir = UPLOAD_DIR / exam_id
+        if exam_dir.exists():
+            shutil.rmtree(exam_dir, ignore_errors=True)
+            
+        return {"status": "success"}
+    raise HTTPException(404, "Exam not found")
 
 
 @app.post("/api/reference/upload")
@@ -617,23 +689,25 @@ async def upload_reference_answer_sheet(
     exam_id = f"exam_{uuid.uuid4().hex[:8]}"
     exam_dir = UPLOAD_DIR / exam_id
     exam_dir.mkdir(parents=True, exist_ok=True)
-    reference_path = exam_dir / f"reference_{file.filename}"
+    safe_name = _Path(file.filename).name
+    reference_path = exam_dir / f"reference_{safe_name}"
     reference_path.write_bytes(await file.read())
 
     exams[exam_id] = {
         "exam_id": exam_id,
         "status": "queued",
         "progress": 0.0,
-        "title": "Reference Answer Key",
+        "title": safe_name,
         "exam_code": "",
+        "created_at": datetime.datetime.now().isoformat(),
         "reference": {},
         "questions": [],
         "students": [],
         "error": None,
         "metrics": _empty_metrics(),
     }
-
     background_tasks.add_task(run_reference_pipeline, exam_id, str(reference_path))
+    _save_exams_db(exam_id)
     return {"exam_id": exam_id, "status": "queued"}
 
 
@@ -654,7 +728,8 @@ async def upload_student_submissions(
 
     saved_paths = []
     for file in files:
-        destination = exam_dir / file.filename
+        safe_name = _Path(file.filename).name
+        destination = exam_dir / safe_name
         destination.write_bytes(await file.read())
         saved_paths.append(str(destination))
 
